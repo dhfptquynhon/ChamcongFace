@@ -1,0 +1,18 @@
+Tóm tắt cách fix lỗi @tensorflow/tfjs-node trên Windows
+Nguyên nhân: @vladmandic/face-api hardcode require('@tensorflow/tfjs-node') bên trong, nhưng package này cần native binary (.node file) không tương thích với Node.js v18 trên Windows.
+Giải pháp: Tạo package giả tên @tensorflow/tfjs-node trỏ sang @tensorflow/tfjs (pure JavaScript, không cần native binary).
+3 bước thực hiện:
+powershell# Bước 1: Tạo thư mục mock
+New-Item -ItemType Directory -Force -Path ".\node_modules\@tensorflow\tfjs-node"
+
+# Bước 2: Tạo 2 file trong thư mục đó
+Set-Content -Path ".\node_modules\@tensorflow\tfjs-node\index.js" -Value "module.exports = require('@tensorflow/tfjs');"
+
+Set-Content -Path ".\node_modules\@tensorflow\tfjs-node\package.json" -Value '{"name":"@tensorflow/tfjs-node","version":"4.22.0","main":"index.js"}'
+
+# Bước 3: Cài @tensorflow/tfjs (pure JS version)
+npm install @tensorflow/tfjs
+Lưu ý quan trọng:
+
+Sau khi chạy npm install lần nào đó, thư mục mock có thể bị xóa → cần tạo lại từ Bước 1
+Để tránh bị xóa, thêm vào package.json phần scripts một lệnh postinstall tự động tạo lại mock sau mỗi lần npm install

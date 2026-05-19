@@ -1,0 +1,432 @@
+-- Xóa database nếu tồn tại
+DROP DATABASE IF EXISTS chamcong;
+CREATE DATABASE chamcong CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE chamcong;
+
+-- ======================
+-- 1. Bảng nhân viên
+-- ======================
+CREATE TABLE nhanvien (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ma_nhan_vien VARCHAR(50) UNIQUE NOT NULL,
+    ten_nhan_vien VARCHAR(100) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    is_admin BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- ======================
+-- 2. Bảng lịch trực
+-- ======================
+CREATE TABLE lich_truc (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    ngay DATE NOT NULL,
+    ca ENUM('ca1', 'ca2', 'ca3', 'ca4') NOT NULL,
+    nhan_vien_id INT NOT NULL,
+    ma_nhan_vien VARCHAR(50) NOT NULL,
+    ten_nhan_vien VARCHAR(100) NOT NULL,
+    trang_thai ENUM('registered', 'checked_in', 'checked_out') DEFAULT 'registered',
+    gio_vao TIME,
+    gio_ra TIME,
+    thoi_gian_lam DECIMAL(5,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (nhan_vien_id) REFERENCES nhanvien(id) ON DELETE CASCADE,
+    INDEX idx_ngay (ngay),
+    INDEX idx_ca (ca),
+    INDEX idx_ma_nhan_vien (ma_nhan_vien),
+    UNIQUE KEY unique_schedule (ngay, ca, nhan_vien_id)
+) ENGINE=InnoDB;
+
+-- ======================
+-- 3. Bảng chấm công THÔNG THƯỜNG
+-- ======================
+CREATE TABLE cham_cong (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nhan_vien_id INT NOT NULL,
+    ma_nhan_vien VARCHAR(50) NOT NULL,
+    ten_nhan_vien VARCHAR(100) NOT NULL,
+    ngay_cham_cong DATE NOT NULL,
+    gio_vao TIME,
+    gio_ra TIME,
+    trang_thai VARCHAR(50),
+    thoi_gian_lam FLOAT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_chamcong_nhanvien
+        FOREIGN KEY (nhan_vien_id) REFERENCES nhanvien(id)
+        ON DELETE CASCADE,
+
+    INDEX idx_ngay_cham_cong (ngay_cham_cong),
+    INDEX idx_nhan_vien_id (nhan_vien_id),
+    INDEX idx_ma_nhan_vien (ma_nhan_vien)
+) ENGINE=InnoDB;
+
+-- ======================
+-- 4. Bảng trực thay
+-- ======================
+CREATE TABLE truc_thay (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nguoi_nho_id INT NOT NULL,
+    nguoi_duoc_nho_id INT NOT NULL,
+    ca VARCHAR(50),
+    ngay DATE,
+    trang_thai VARCHAR(20) DEFAULT 'cho',
+    admin_duyet TINYINT(1) DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_tructhay_nguoinho
+        FOREIGN KEY (nguoi_nho_id) REFERENCES nhanvien(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_tructhay_nguoiduocnho
+        FOREIGN KEY (nguoi_duoc_nho_id) REFERENCES nhanvien(id)
+        ON DELETE CASCADE,
+
+    INDEX idx_ngay (ngay),
+    INDEX idx_ca (ca)
+) ENGINE=InnoDB;
+
+-- ======================
+-- 5. Trigger giới hạn số lượng (tối đa 6 người/ca)
+-- ======================
+DELIMITER $$
+
+CREATE TRIGGER before_insert_lich_truc
+BEFORE INSERT ON lich_truc
+FOR EACH ROW
+BEGIN
+    DECLARE user_count INT;
+    
+    SELECT COUNT(*) INTO user_count 
+    FROM lich_truc 
+    WHERE ngay = NEW.ngay AND ca = NEW.ca;
+    
+    IF user_count >= 6 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Ca đã đủ số lượng người đăng ký (tối đa 6 người)';
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- ======================
+-- 6. Hàm và thủ tục thống kê
+-- ======================
+
+-- Hàm chuyển đổi giờ thập phân sang giờ:phút
+DELIMITER $$
+
+CREATE FUNCTION format_hours(decimal_hours DECIMAL(5,2))
+RETURNS VARCHAR(50)
+DETERMINISTIC
+BEGIN
+    DECLARE hours INT;
+    DECLARE minutes INT;
+    
+    IF decimal_hours IS NULL OR decimal_hours = 0 THEN
+        RETURN '0 giờ 0 phút';
+    END IF;
+    
+    SET hours = FLOOR(decimal_hours);
+    SET minutes = ROUND((decimal_hours - hours) * 60);
+    
+    RETURN CONCAT(hours, ' giờ ', minutes, ' phút');
+END$$
+
+DELIMITER ;
+
+-- Thủ tục lấy tổng thời gian làm việc trong ngày cho một nhân viên
+DELIMITER $$
+
+CREATE PROCEDURE sp_daily_summary(
+    IN p_ma_nhan_vien VARCHAR(50),
+    IN p_date DATE
+)
+BEGIN
+    SELECT 
+        p_ma_nhan_vien AS ma_nhan_vien,
+        p_date AS ngay,
+        COUNT(*) AS so_ca_da_lam,
+        COALESCE(SUM(thoi_gian_lam), 0) AS tong_thoi_gian_lam,
+        format_hours(COALESCE(SUM(thoi_gian_lam), 0)) AS tong_thoi_gian_gio,
+        GROUP_CONCAT(CONCAT(ca, ':', COALESCE(thoi_gian_lam, 0)) SEPARATOR ';') AS chi_tiet_ca
+    FROM lich_truc
+    WHERE ma_nhan_vien = p_ma_nhan_vien 
+        AND ngay = p_date 
+        AND trang_thai = 'checked_out';
+END$$
+
+DELIMITER ;
+
+-- Thủ tục lấy số ca đã đăng ký trong ngày (cho tất cả nhân viên hoặc một nhân viên cụ thể)
+DELIMITER $$
+
+CREATE PROCEDURE sp_daily_registered_shifts(
+    IN p_date DATE,
+    IN p_ma_nhan_vien VARCHAR(50) -- NULL để lấy tất cả
+)
+BEGIN
+    IF p_ma_nhan_vien IS NULL THEN
+        -- Tổng số ca đã đăng ký trong ngày (tất cả nhân viên)
+        SELECT 
+            p_date AS ngay,
+            COUNT(*) AS tong_so_ca_da_dang_ky,
+            GROUP_CONCAT(DISTINCT ca ORDER BY ca SEPARATOR ', ') AS cac_ca_da_dang_ky,
+            GROUP_CONCAT(CONCAT(ten_nhan_vien, ' (', ca, ')') SEPARATOR '; ') AS danh_sach_dang_ky
+        FROM lich_truc
+        WHERE ngay = p_date;
+    ELSE
+        -- Số ca đã đăng ký trong ngày của một nhân viên cụ thể
+        SELECT 
+            p_date AS ngay,
+            p_ma_nhan_vien AS ma_nhan_vien,
+            COUNT(*) AS so_ca_da_dang_ky,
+            GROUP_CONCAT(ca ORDER BY ca SEPARATOR ', ') AS cac_ca_da_dang_ky,
+            GROUP_CONCAT(CONCAT(ca, ' - ', trang_thai) SEPARATOR '; ') AS chi_tiet_trang_thai
+        FROM lich_truc
+        WHERE ngay = p_date AND ma_nhan_vien = p_ma_nhan_vien;
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- Thủ tục lấy số ca đã đăng ký trong tháng
+DELIMITER $$
+
+CREATE PROCEDURE sp_monthly_registered_shifts(
+    IN p_month INT,
+    IN p_year INT,
+    IN p_ma_nhan_vien VARCHAR(50) -- NULL để lấy tất cả
+)
+BEGIN
+    DECLARE start_date DATE;
+    DECLARE end_date DATE;
+    
+    SET start_date = DATE(CONCAT(p_year, '-', LPAD(p_month, 2, '0'), '-01'));
+    SET end_date = LAST_DAY(start_date);
+    
+    IF p_ma_nhan_vien IS NULL THEN
+        -- Tổng số ca đã đăng ký trong tháng (tất cả nhân viên)
+        SELECT 
+            p_month AS thang,
+            p_year AS nam,
+            COUNT(*) AS tong_so_ca_da_dang_ky,
+            COUNT(DISTINCT ngay) AS so_ngay_co_dang_ky,
+            GROUP_CONCAT(DISTINCT DATE_FORMAT(ngay, '%d/%m/%Y') ORDER BY ngay SEPARATOR ', ') AS cac_ngay_co_dang_ky
+        FROM lich_truc
+        WHERE ngay BETWEEN start_date AND end_date;
+    ELSE
+        -- Số ca đã đăng ký trong tháng của một nhân viên cụ thể
+        SELECT 
+            p_month AS thang,
+            p_year AS nam,
+            p_ma_nhan_vien AS ma_nhan_vien,
+            COUNT(*) AS so_ca_da_dang_ky,
+            COUNT(DISTINCT ngay) AS so_ngay_da_dang_ky,
+            GROUP_CONCAT(DISTINCT DATE_FORMAT(ngay, '%d/%m') ORDER BY ngay SEPARATOR ', ') AS cac_ngay_da_dang_ky,
+            GROUP_CONCAT(CONCAT(DATE_FORMAT(ngay, '%d/%m'), ': ', ca, ' - ', trang_thai) SEPARATOR '; ') AS chi_tiet
+        FROM lich_truc
+        WHERE ngay BETWEEN start_date AND end_date 
+            AND ma_nhan_vien = p_ma_nhan_vien;
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- Thủ tục lấy tình trạng đang làm (check-in nhưng chưa check-out)
+DELIMITER $$
+
+CREATE PROCEDURE sp_current_working_status(
+    IN p_date DATE -- NULL để lấy tất cả ngày hiện tại
+)
+BEGIN
+    DECLARE current_date_val DATE;
+    
+    IF p_date IS NULL THEN
+        SET current_date_val = CURDATE();
+    ELSE
+        SET current_date_val = p_date;
+    END IF;
+    
+    SELECT 
+        current_date_val AS ngay_hien_tai,
+        COUNT(*) AS tong_so_dang_lam,
+        GROUP_CONCAT(CONCAT(ten_nhan_vien, ' (', ca, ')') SEPARATOR '; ') AS danh_sach_dang_lam
+    FROM lich_truc
+    WHERE ngay = current_date_val 
+        AND trang_thai = 'checked_in';
+    
+    -- Chi tiết từng người đang làm
+    SELECT 
+        ma_nhan_vien,
+        ten_nhan_vien,
+        ca,
+        gio_vao,
+        TIMEDIFF(CURRENT_TIME(), gio_vao) AS thoi_gian_da_lam
+    FROM lich_truc
+    WHERE ngay = current_date_val 
+        AND trang_thai = 'checked_in'
+    ORDER BY ca, gio_vao;
+END$$
+
+DELIMITER ;
+
+-- Thủ tục tổng hợp báo cáo tháng
+DELIMITER $$
+
+CREATE PROCEDURE sp_monthly_report(
+    IN p_ma_nhan_vien VARCHAR(50),
+    IN p_month INT,
+    IN p_year INT
+)
+BEGIN
+    DECLARE start_date DATE;
+    DECLARE end_date DATE;
+    
+    SET start_date = DATE(CONCAT(p_year, '-', LPAD(p_month, 2, '0'), '-01'));
+    SET end_date = LAST_DAY(start_date);
+    
+    -- Tổng hợp tháng
+    SELECT 
+        p_month AS thang,
+        p_year AS nam,
+        p_ma_nhan_vien AS ma_nhan_vien,
+        COUNT(*) AS tong_so_ca_trong_thang,
+        SUM(CASE WHEN trang_thai = 'checked_out' THEN 1 ELSE 0 END) AS so_ca_da_hoan_thanh,
+        SUM(CASE WHEN trang_thai = 'checked_in' THEN 1 ELSE 0 END) AS so_ca_dang_lam,
+        SUM(CASE WHEN trang_thai = 'registered' THEN 1 ELSE 0 END) AS so_ca_da_dang_ky,
+        COALESCE(SUM(thoi_gian_lam), 0) AS tong_thoi_gian_lam,
+        format_hours(COALESCE(SUM(thoi_gian_lam), 0)) AS tong_thoi_gian_gio
+    FROM lich_truc
+    WHERE ma_nhan_vien = p_ma_nhan_vien 
+        AND ngay BETWEEN start_date AND end_date;
+    
+    -- Chi tiết theo ngày
+    SELECT 
+        ngay,
+        COUNT(*) AS so_ca_trong_ngay,
+        GROUP_CONCAT(CONCAT(ca, ':', COALESCE(thoi_gian_lam, 0), 'h') SEPARATOR '; ') AS chi_tiet_ca,
+        COALESCE(SUM(thoi_gian_lam), 0) AS tong_thoi_gian_ngay,
+        format_hours(COALESCE(SUM(thoi_gian_lam), 0)) AS tong_thoi_gian_ngay_gio
+    FROM lich_truc
+    WHERE ma_nhan_vien = p_ma_nhan_vien 
+        AND ngay BETWEEN start_date AND end_date
+        AND trang_thai = 'checked_out'
+    GROUP BY ngay
+    ORDER BY ngay;
+END$$
+
+DELIMITER ;
+
+-- Thủ tục lấy dashboard thống kê nhanh
+DELIMITER $$
+
+CREATE PROCEDURE sp_dashboard_summary(
+    IN p_ma_nhan_vien VARCHAR(50)
+)
+BEGIN
+    DECLARE today_date DATE;
+    DECLARE current_month INT;
+    DECLARE current_year INT;
+    
+    SET today_date = CURDATE();
+    SET current_month = MONTH(today_date);
+    SET current_year = YEAR(today_date);
+    
+    -- Tổng hợp hôm nay
+    SELECT 
+        'today' AS period,
+        COUNT(*) AS total_shifts,
+        SUM(CASE WHEN trang_thai = 'checked_out' THEN thoi_gian_lam ELSE 0 END) AS total_hours,
+        format_hours(SUM(CASE WHEN trang_thai = 'checked_out' THEN thoi_gian_lam ELSE 0 END)) AS formatted_hours
+    FROM lich_truc
+    WHERE ma_nhan_vien = p_ma_nhan_vien 
+        AND ngay = today_date;
+    
+    -- Tổng hợp tháng này
+    SELECT 
+        'month' AS period,
+        COUNT(*) AS total_shifts,
+        SUM(CASE WHEN trang_thai = 'checked_out' THEN thoi_gian_lam ELSE 0 END) AS total_hours,
+        format_hours(SUM(CASE WHEN trang_thai = 'checked_out' THEN thoi_gian_lam ELSE 0 END)) AS formatted_hours
+    FROM lich_truc
+    WHERE ma_nhan_vien = p_ma_nhan_vien 
+        AND YEAR(ngay) = current_year 
+        AND MONTH(ngay) = current_month;
+    
+    -- Ca đang làm hiện tại (nếu có)
+    SELECT 
+        'current' AS status,
+        ca,
+        gio_vao,
+        TIMEDIFF(CURRENT_TIME(), gio_vao) AS time_elapsed
+    FROM lich_truc
+    WHERE ma_nhan_vien = p_ma_nhan_vien 
+        AND ngay = today_date 
+        AND trang_thai = 'checked_in'
+    LIMIT 1;
+END$$
+
+DELIMITER ;
+
+-- ======================
+-- 7. View để dễ dàng truy vấn
+-- ======================
+
+-- View tổng hợp ca làm theo ngày
+CREATE VIEW v_daily_shifts_summary AS
+SELECT 
+    ngay,
+    ca,
+    COUNT(*) AS so_luong_nguoi,
+    GROUP_CONCAT(ten_nhan_vien ORDER BY ten_nhan_vien SEPARATOR ', ') AS danh_sach_nhan_vien,
+    SUM(CASE WHEN trang_thai = 'checked_out' THEN thoi_gian_lam ELSE 0 END) AS tong_gio_lam
+FROM lich_truc
+GROUP BY ngay, ca
+ORDER BY ngay DESC, ca;
+
+-- View thống kê nhân viên theo tháng
+CREATE VIEW v_monthly_employee_stats AS
+SELECT 
+    ma_nhan_vien,
+    ten_nhan_vien,
+    YEAR(ngay) AS nam,
+    MONTH(ngay) AS thang,
+    COUNT(*) AS tong_so_ca,
+    SUM(CASE WHEN trang_thai = 'checked_out' THEN 1 ELSE 0 END) AS so_ca_hoan_thanh,
+    SUM(CASE WHEN trang_thai = 'checked_in' THEN 1 ELSE 0 END) AS so_ca_dang_lam,
+    COALESCE(SUM(thoi_gian_lam), 0) AS tong_gio_lam,
+    format_hours(COALESCE(SUM(thoi_gian_lam), 0)) AS tong_gio_lam_formatted
+FROM lich_truc
+GROUP BY ma_nhan_vien, ten_nhan_vien, YEAR(ngay), MONTH(ngay)
+ORDER BY nam DESC, thang DESC, tong_gio_lam DESC;
+
+-- View ca đang làm hiện tại
+CREATE VIEW v_current_working_shifts AS
+SELECT 
+    lt.ngay,
+    lt.ca,
+    lt.ma_nhan_vien,
+    lt.ten_nhan_vien,
+    lt.gio_vao,
+    TIMEDIFF(CURRENT_TIME(), lt.gio_vao) AS thoi_gian_da_lam,
+    TIME_FORMAT(TIMEDIFF(CURRENT_TIME(), lt.gio_vao), '%H giờ %i phút') AS thoi_gian_da_lam_formatted
+FROM lich_truc lt
+WHERE lt.ngay = CURDATE() 
+    AND lt.trang_thai = 'checked_in'
+ORDER BY lt.ca, lt.gio_vao;
+
+-- ======================
+-- 7. Kiểm tra
+-- ======================
+DESCRIBE nhanvien;
+DESCRIBE cham_cong;
+DESCRIBE truc_thay;
+DESCRIBE lich_truc;
+
+SELECT * FROM nhanvien;
+SELECT * FROM cham_cong;
+SELECT * FROM lich_truc;
