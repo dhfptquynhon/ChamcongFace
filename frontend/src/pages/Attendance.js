@@ -285,7 +285,7 @@ const Attendance = ({ onChanged }) => {
             variant="body2"
             sx={{
               fontWeight: 600,
-              color: (theme) => (theme.palette.mode === 'dark' ? '#66bb6a' : '#2e7d32')
+              color: (theme) => (theme.palette.mode === 'dark' ? '#66bb6a' : '#ffffff')
             }}
           >
             Ngày: {formattedToday}
