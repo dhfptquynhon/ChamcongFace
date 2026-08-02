@@ -170,16 +170,20 @@ const Attendance = ({ onChanged }) => {
     setMessage('');
     setError('');
     try {
+      const url = shift.is_truc_thay
+        ? `http://localhost:5000/api/attendance/truc-thay/checkin/${shift.lich_truc_ao_id || shift.id}`
+        : `http://localhost:5000/api/attendance/schedule/${shift.id}/checkin`;
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/schedule/${shift.id}/checkin`,
+        url,
         {},
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       setMessage(res.data?.message || 'Check-in thành công');
+      const gioVao = shift.is_truc_thay ? res.data?.data?.gio_vao : res.data?.time;
       setShifts((prev) =>
         prev.map((s) =>
           s.id === shift.id
-            ? { ...s, trang_thai: 'checked_in', gio_vao: res.data?.time || s.gio_vao }
+            ? { ...s, trang_thai: 'checked_in', gio_vao: gioVao || s.gio_vao }
             : s
         )
       );
@@ -188,7 +192,7 @@ const Attendance = ({ onChanged }) => {
       // Kiểm tra xem có phải lỗi quá giờ và có thể gửi yêu cầu không
       if (err.response?.status === 400 && err.response?.data?.canRequestAdjustment) {
         handleOpenTimeAdjustmentDialog(
-          shift, 
+          shift,
           err.response.data.loai_yeu_cau || 'checkin',
           err.response.data.shiftEnd
         );
@@ -206,20 +210,25 @@ const Attendance = ({ onChanged }) => {
     setMessage('');
     setError('');
     try {
+      const url = shift.is_truc_thay
+        ? `http://localhost:5000/api/attendance/truc-thay/checkout/${shift.lich_truc_ao_id || shift.id}`
+        : `http://localhost:5000/api/attendance/schedule/${shift.id}/checkout`;
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/schedule/${shift.id}/checkout`,
+        url,
         {},
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       setMessage(res.data?.message || 'Check-out thành công');
+      const gioRa = shift.is_truc_thay ? res.data?.data?.gio_ra : res.data?.time;
+      const thoiGianLam = shift.is_truc_thay ? res.data?.data?.thoi_gian_lam : res.data?.workDuration;
       setShifts((prev) =>
         prev.map((s) =>
           s.id === shift.id
             ? {
                 ...s,
                 trang_thai: 'checked_out',
-                gio_ra: res.data?.time || s.gio_ra,
-                thoi_gian_lam: res.data?.workDuration ?? s.thoi_gian_lam,
+                gio_ra: gioRa || s.gio_ra,
+                thoi_gian_lam: thoiGianLam ?? s.thoi_gian_lam,
               }
             : s
         )
@@ -229,7 +238,7 @@ const Attendance = ({ onChanged }) => {
       // Kiểm tra xem có phải lỗi quá giờ và có thể gửi yêu cầu không
       if (err.response?.status === 400 && err.response?.data?.canRequestAdjustment) {
         handleOpenTimeAdjustmentDialog(
-          shift, 
+          shift,
           err.response.data.loai_yeu_cau || 'checkout',
           err.response.data.shiftEnd
         );
@@ -320,13 +329,17 @@ const Attendance = ({ onChanged }) => {
 
             return (
               <Grid item xs={12} sm={6} md={4} key={shift.id}>
-                <Paper 
-                  sx={{ 
-                    p: 2, 
+                <Paper
+                  sx={{
+                    p: 2,
                     height: '100%',
                     display: 'flex',
                     flexDirection: 'column',
                     transition: 'all 0.3s',
+                    ...(shift.is_truc_thay && {
+                      backgroundColor: '#fff8ef',
+                      border: '1px solid #ffb74d',
+                    }),
                     '&:hover': {
                       boxShadow: 3,
                       transform: 'translateY(-2px)'
@@ -335,9 +348,18 @@ const Attendance = ({ onChanged }) => {
                 >
                   {/* Header */}
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-                    <Typography variant="subtitle1" fontWeight={600} sx={{ lineHeight: 1.2 }}>
-                      {SHIFT_LABELS[shift.ca] || shift.ca}
-                    </Typography>
+                    <Box>
+                      <Typography variant="subtitle1" fontWeight={600} sx={{ lineHeight: 1.2 }}>
+                        {SHIFT_LABELS[shift.ca] || shift.ca}
+                      </Typography>
+                      {shift.is_truc_thay && (
+                        <Chip
+                          label="🔄 Ca trực thay"
+                          size="small"
+                          sx={{ mt: 0.5, bgcolor: '#ff9800', color: 'white', fontWeight: 600, fontSize: '0.65rem', height: 20 }}
+                        />
+                      )}
+                    </Box>
                     <Chip
                       label={statusCfg.label}
                       color={statusCfg.color}
@@ -346,6 +368,12 @@ const Attendance = ({ onChanged }) => {
                       sx={{ ml: 1 }}
                     />
                   </Box>
+
+                  {shift.is_truc_thay && shift.ten_nguoi_duoc_truc_thay && (
+                    <Alert severity="warning" sx={{ mb: 1, py: 0, fontSize: '0.75rem', backgroundColor: '#fff3e0' }}>
+                      Trực thay cho <strong>{shift.ten_nguoi_duoc_truc_thay}</strong> — giờ làm sẽ tính cho họ.
+                    </Alert>
+                  )}
 
                   <Divider sx={{ my: 1 }} />
 
@@ -357,14 +385,14 @@ const Attendance = ({ onChanged }) => {
                         {formatTime(shift.gio_vao) || '--:--'}
                       </Typography>
                     </Box>
-                    
+
                     <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                       <Typography variant="body2" color="text.secondary">Giờ ra:</Typography>
                       <Typography variant="body2" fontWeight={500}>
                         {formatTime(shift.gio_ra) || '--:--'}
                       </Typography>
                     </Box>
-                    
+
                     <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                       <Typography variant="body2" color="text.secondary">Thời gian làm:</Typography>
                       <Typography variant="body2" fontWeight={500}>

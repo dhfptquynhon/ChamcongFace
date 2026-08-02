@@ -80,6 +80,14 @@ const statusColor = {
   checked_out: '#bbdefb',
 };
 
+// Bảng màu khung/chữ cho từng trạng thái ca, giúp phân biệt rõ ràng ngay trên ô lịch
+const STATUS_THEME = {
+  registered: { bg: '#e8f8ec', border: '#2e7d32', text: '#1b5e20' },
+  checked_in: { bg: '#fffbe6', border: '#f2a900', text: '#7a5900' },
+  checked_out: { bg: '#e8f2fd', border: '#1565c0', text: '#0d47a1' },
+  default: { bg: '#f4f6f8', border: '#94a3b8', text: '#334155' },
+};
+
 const statusLabel = {
   registered: 'Đã đăng ký',
   checked_in: 'Đang làm',
@@ -134,21 +142,21 @@ const exportMonthlyReportToExcel = (reportData, employeeName, month, year) => {
         // Tách chi tiết các ca trong ngày
         if (dayReport.chi_tiet_ca) {
           const caDetails = dayReport.chi_tiet_ca.split(';');
-          caDetails.forEach((caDetail, caIndex) => {
-            const [caKey, hours] = caDetail.split(':');
+          caDetails.forEach((caDetail) => {
+            const [caKey, hours, gioVao, gioRa, nguoiTrucThay] = caDetail.split('|');
             const shift = SHIFTS.find(s => s.key === caKey) || { label: caKey };
-            
+
             rows.push([
               stt++,
               dayReport.ngay ? new Date(dayReport.ngay).toLocaleDateString('vi-VN') : '',
               dayReport.ngay ? dayNames[new Date(dayReport.ngay).getDay()] : '',
               shift.label,
-              '', // Giờ vào - có thể thêm từ dữ liệu chi tiết nếu có
-              '', // Giờ ra - có thể thêm từ dữ liệu chi tiết nếu có
+              gioVao || '',
+              gioRa || '',
               Number(hours).toFixed(2),
               Math.round(Number(hours) * 60),
               'Hoàn thành',
-              `Ca ${caIndex + 1} trong ngày ${new Date(dayReport.ngay).toLocaleDateString('vi-VN')}`
+              nguoiTrucThay ? `${nguoiTrucThay} trực thay cho bạn ca này` : ''
             ]);
           });
         }
@@ -163,14 +171,51 @@ const exportMonthlyReportToExcel = (reportData, employeeName, month, year) => {
       
       rows.push([]);
       rows.push(['', '', '', '', '', '', '', '', '', '']);
-      rows.push(['TỔNG KẾT THÁNG', '', '', '', '', '', 
-        totalHours.toFixed(2), 
+      rows.push(['TỔNG KẾT THÁNG', '', '', '', '', '',
+        totalHours.toFixed(2),
         totalMinutes,
-        '', 
+        '',
         `Số ngày làm: ${reportData.daily_reports.length}, Tổng ca: ${reportData.monthly_summary.tong_so_ca}`
       ]);
     }
-    
+
+    // Bảng trực thay 2 chiều: bạn được ai trực thay (cần trả tiền họ) và bạn trực thay cho ai (họ cần trả bạn)
+    const receivedList = reportData.substitution_summary || [];
+    const performedList = reportData.performed_substitution_summary || [];
+    if (receivedList.length > 0 || performedList.length > 0) {
+      rows.push([]);
+      rows.push(['BẢNG TRỰC THAY THÁNG', '', '', '', '', '', '', '', '', '']);
+      rows.push(['Người', '', '', '', '', '', 'Tổng giờ', 'Tổng phút', 'Số ca', 'Ghi chú']);
+
+      if (receivedList.length > 0) {
+        rows.push([]);
+        rows.push(['Bạn được trực thay bởi (bạn cần thanh toán lại):', '', '', '', '', '', '', '', '', '']);
+        receivedList.forEach((row) => {
+          rows.push([
+            '', row.ten_nguoi_truc_thay, '', '', '', '',
+            Number(row.tong_gio).toFixed(2),
+            Math.round(Number(row.tong_gio) * 60),
+            row.so_ca,
+            `Thanh toán lại ${row.tong_gio}h cho ${row.ten_nguoi_truc_thay}`
+          ]);
+        });
+      }
+
+      if (performedList.length > 0) {
+        rows.push([]);
+        rows.push(['Bạn đã trực thay cho (họ cần thanh toán lại bạn):', '', '', '', '', '', '', '', '', '']);
+        performedList.forEach((row) => {
+          rows.push([
+            '', row.ten_nguoi_duoc_truc_thay, '', '', '', '',
+            Number(row.tong_gio).toFixed(2),
+            Math.round(Number(row.tong_gio) * 60),
+            row.so_ca,
+            `${row.ten_nguoi_duoc_truc_thay} thanh toán lại ${row.tong_gio}h cho bạn`
+          ]);
+        });
+      }
+    }
+
     // Tạo nội dung CSV (đơn giản nhất để xuất)
     const csvContent = [
       ...headers.map(row => row.join(',')),
@@ -820,6 +865,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
   lyDo: '',
 });
   const [myTrucThayShifts, setMyTrucThayShifts] = useState([]);
+  const [myReceivedTrucThayShifts, setMyReceivedTrucThayShifts] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [fetchingEmployees, setFetchingEmployees] = useState(false);
   const [selectedDate, setSelectedDate] = useState(today.toISOString().split('T')[0]);
@@ -906,6 +952,25 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       setMyTrucThayShifts([]);
     }
   }, [auth, showSnackbar]);
+
+  // Hàm load các ca CỦA TÔI đã được người khác trực thay (chiều ngược lại)
+  const loadMyReceivedTrucThayShifts = useCallback(async () => {
+    if (!auth?.token) return;
+    try {
+      const res = await axios.get(
+        'http://localhost:5000/api/attendance/truc-thay/received-shifts',
+        { headers: { Authorization: `Bearer ${auth.token}` }, timeout: 10000 }
+      );
+      if (res.data.success && res.data.data) {
+        setMyReceivedTrucThayShifts(res.data.data);
+      } else {
+        setMyReceivedTrucThayShifts([]);
+      }
+    } catch (error) {
+      console.error('❌ Lỗi lấy ca được trực thay:', error);
+      setMyReceivedTrucThayShifts([]);
+    }
+  }, [auth]);
 
   // Hàm load lịch sử yêu cầu điều chỉnh của tôi (MỚI)
   const loadMyTimeAdjustments = useCallback(async () => {
@@ -1070,9 +1135,10 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     fetchEmployees();
     if (auth?.token) {
       loadMyTrucThayShifts();
+      loadMyReceivedTrucThayShifts();
       loadMyTimeAdjustments();
     }
-  }, [fetchSchedule, fetchEmployees, loadMyTrucThayShifts, loadMyTimeAdjustments, auth, refreshToken]);
+  }, [fetchSchedule, fetchEmployees, loadMyTrucThayShifts, loadMyReceivedTrucThayShifts, loadMyTimeAdjustments, auth, refreshToken]);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -1167,7 +1233,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
 
     // Đóng dialog và refresh dữ liệu
     setTrucThayDialog({ open: false, usersList: [], selectedUser: null, lyDo: '' });
-    await Promise.all([fetchSchedule(), loadMyTrucThayShifts()]);
+    await Promise.all([fetchSchedule(), loadMyTrucThayShifts(), loadMyReceivedTrucThayShifts()]);
 
   } catch (error) {
     console.error('❌ Lỗi trực thay:', error);
@@ -1473,6 +1539,9 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       );
       
       showSnackbar(res.data?.message || 'Đăng ký thành công', 'success');
+      if (res.data?.warning) {
+        setTimeout(() => showSnackbar(`⚠️ ${res.data.warning} (${Number(res.data.total_month_hours || 0).toFixed(1)}h/91h)`, 'warning', 6000), 800);
+      }
         await fetchSchedule();
     } catch (err) {
       const errorMsg = err.response?.data?.message || 'Không thể đăng ký ca';
@@ -1780,23 +1849,33 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     };
     
     const hasTrucThay = trucThayInfo.receiver || trucThayInfo.performer;
-    
-    // TOOLTIP HIỂN THỊ ĐÚNG
-    let tooltipText = `${users.length} người đã đăng ký`;
-    
-    if (hasTrucThay) {
-      if (trucThayInfo.receiver && trucThayInfo.performer) {
-        // CÓ CẢ A VÀ B
-        tooltipText += `\n• ${trucThayInfo.receiver.ten_nhan_vien} (được trực thay bởi ${trucThayInfo.performer.ten_nhan_vien})`;
-        tooltipText += `\n• ${trucThayInfo.performer.ten_nhan_vien} (đang trực thay cho ${trucThayInfo.receiver.ten_nhan_vien})`;
-      } else if (trucThayInfo.receiver) {
-        // CHỈ CÓ A (B có thể đã bị xóa)
-        tooltipText += `\n• ${trucThayInfo.receiver.ten_nhan_vien} (được trực thay)`;
-      } else if (trucThayInfo.performer) {
-        // CHỈ CÓ B (A có thể đã bị xóa)
-        tooltipText += `\n• ${trucThayInfo.performer.ten_nhan_vien} (đang trực thay)`;
+
+    // DANH SÁCH HIỂN THỊ: ca có trực thay chỉ hiện TÊN NGƯỜI ĐĂNG KÝ GỐC (vd: Thiện) thay vì
+    // người trực tiếp làm (vd: Biên) - ẩn dòng "ảo" của người trực thay để không đếm trùng người,
+    // đồng thời gộp giờ làm/trạng thái thực tế của người trực thay vào dòng hiển thị của người gốc.
+    const performers = users.filter(u => u.truc_thay_type === 'performer');
+    const displayUsers = users
+      .filter(u => u.truc_thay_type !== 'performer')
+      .map(u => {
+        if (u.truc_thay_type !== 'receiver') return u;
+        const matchedPerformer = performers.find(p => p.lich_truc_goc_id === u.id) || performers[0];
+        return {
+          ...u,
+          thoi_gian_lam: matchedPerformer?.thoi_gian_lam ?? u.thoi_gian_lam,
+          trang_thai: matchedPerformer?.trang_thai ?? u.trang_thai,
+          gio_vao: matchedPerformer?.gio_vao ?? u.gio_vao,
+          gio_ra: matchedPerformer?.gio_ra ?? u.gio_ra,
+          substituted_by_name: matchedPerformer?.ten_nhan_vien || null,
+        };
+      });
+
+    // TOOLTIP: "Thiện trực thay bởi Biên" cho từng người bị thay ca trong ô này
+    let tooltipText = `${displayUsers.length} người đã đăng ký`;
+    displayUsers.forEach(u => {
+      if (u.substituted_by_name) {
+        tooltipText += `\n• ${u.ten_nhan_vien} trực thay bởi ${u.substituted_by_name}`;
       }
-    }
+    });
 
     // Lọc những người khác (không phải mình và không phải người đang trực thay)
     const otherUsers = users.filter(u => 
@@ -1821,13 +1900,15 @@ const [trucThayDialog, setTrucThayDialog] = useState({
             transition: 'all 0.2s ease',
             fontSize: '0.75rem',
             opacity: registerCheck.canRegister ? 1 : 0.7,
-            backgroundColor: !registerCheck.canRegister ? '#f5f5f5' : '#f8f9fa',
+            backgroundColor: !registerCheck.canRegister ? '#f1f3f5' : '#fafbfc',
+            border: registerCheck.canRegister ? '1.5px dashed #94a3b8' : '1.5px dashed #cbd5e1',
             '&:hover': {
-              backgroundColor: registerCheck.canRegister ? '#f0f7ff' : '#f5f5f5',
+              backgroundColor: registerCheck.canRegister ? '#eef6ff' : '#f1f3f5',
+              borderColor: registerCheck.canRegister ? '#1976d2' : '#cbd5e1',
               boxShadow: registerCheck.canRegister ? 'inset 0 0 0 1px #1976d2' : 'none',
             },
             ...(isSunday && { backgroundColor: registerCheck.canRegister ? '#fff9e6' : '#fff5e6' }),
-            ...(isToday && { 
+            ...(isToday && {
               borderLeft: '3px solid #ff9800',
               borderRight: '3px solid #ff9800'
             }),
@@ -1871,7 +1952,12 @@ const [trucThayDialog, setTrucThayDialog] = useState({
 
     const firstUser = users[0];
     const timeStatus = getTimeStatus(firstUser);
-    
+
+    // Màu khung/nền theo trạng thái ca của chính người dùng (hoặc người đầu tiên trong ca)
+    // để "khung" ca hiện rõ trạng thái ngay từ cái nhìn đầu tiên, không chỉ dựa vào chip nhỏ
+    const activeStatus = userCell?.trang_thai || firstUser?.trang_thai;
+    const cellTheme = STATUS_THEME[activeStatus] || STATUS_THEME.default;
+
     const cellStyle = {
       cursor: 'pointer',
       textAlign: 'center',
@@ -1880,28 +1966,24 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       minWidth: '120px',
       position: 'relative',
       fontSize: '0.75rem',
-      borderLeft: userCell ? '3px solid #1976d2' : 'none',
-      ...(isSunday && { 
-        backgroundColor: '#f5f5f5',
+      transition: 'all 0.2s ease',
+      backgroundColor: cellTheme.bg,
+      borderLeft: `4px solid ${cellTheme.border}`,
+      borderRight: '1px solid rgba(0,0,0,0.08)',
+      ...(isSunday && {
+        backgroundColor: '#fff3f0',
       }),
-      backgroundColor: '#f8f9fa',
-      ...(isToday && { 
+      ...(isToday && {
         borderRight: '3px solid #ff9800'
       }),
-      // MÀU CHO NGƯỜI ĐƯỢC TRỰC THAY (A)
-      ...(trucThayInfo.receiver && {
-        backgroundColor: '#e8f5e8',
-        borderLeft: '3px solid #4caf50',
-        borderRight: '3px solid #4caf50'
-      }),
-      
-      // MÀU CHO NGƯỜI TRỰC THAY (B) - CHỈ KHI LÀ USER HIỆN TẠI
-      ...(trucThayInfo.performer && trucThayInfo.performer.ma_nhan_vien === auth?.employee?.ma_nhan_vien && {
+      // Ca có trực thay: luôn tô màu cam nhất quán (không phân biệt người xem là ai),
+      // giờ công vẫn ghi nhận cho người đăng ký gốc - xem chi tiết khi rê chuột vào ô.
+      ...(hasTrucThay && {
         backgroundColor: '#fff3e0',
-        borderLeft: '3px solid #ff9800',
+        borderLeft: '4px solid #ff9800',
         borderRight: '3px solid #ff9800'
       }),
-      
+
       // BADGE HIỂN THỊ
       ...(hasTrucThay && {
         '&:after': {
@@ -1943,29 +2025,29 @@ const [trucThayDialog, setTrucThayDialog] = useState({
           >
             {/* Header: Số lượng người và avatar */}
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, width: '100%' }}>
-              <PeopleIcon sx={{ fontSize: '0.8rem', color: '#666' }} />
-              <Typography 
-                variant="caption" 
+              <PeopleIcon sx={{ fontSize: '0.8rem', color: cellTheme.text }} />
+              <Typography
+                variant="caption"
                 fontWeight="bold"
-                sx={{ 
+                sx={{
                   fontSize: '0.7rem',
-                  color: '#1976d2'
+                  color: cellTheme.text
                 }}
               >
-                {users.length} người
+                {displayUsers.length} người
               </Typography>
             </Box>
 
-            {/* Danh sách tên người đăng ký */}
-            <Box sx={{ 
-              display: 'flex', 
-              flexDirection: 'column', 
+            {/* Danh sách tên người đăng ký (ca có trực thay hiện tên người đăng ký gốc) */}
+            <Box sx={{
+              display: 'flex',
+              flexDirection: 'column',
               gap: '2px',
               width: '100%',
               maxHeight: '40px',
               overflow: 'hidden'
             }}>
-              {users.slice(0, 2).map((user, idx) => (
+              {displayUsers.slice(0, 2).map((user, idx) => (
                 <Box 
                   key={idx} 
                   sx={{ 
@@ -1979,11 +2061,12 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                     border: user.ma_nhan_vien === auth?.employee?.ma_nhan_vien ? '1px solid #90caf9' : 'none'
                   }}
                 >
-                  <Typography 
-                    variant="caption" 
-                    sx={{ 
+                  <Typography
+                    variant="caption"
+                    sx={{
                       fontSize: '0.55rem',
                       fontWeight: user.ma_nhan_vien === auth?.employee?.ma_nhan_vien ? 'bold' : 'normal',
+                      color: user.ma_nhan_vien === auth?.employee?.ma_nhan_vien ? 'primary.main' : cellTheme.text,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
@@ -1994,13 +2077,13 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                     {user.ten_nhan_vien.split(' ').pop()}
                   </Typography>
                   {user.gio_vao && (
-                    <AccessTimeIcon sx={{ fontSize: '0.5rem', color: '#666' }} />
+                    <AccessTimeIcon sx={{ fontSize: '0.5rem', color: cellTheme.text }} />
                   )}
                 </Box>
               ))}
-              {users.length > 2 && (
-                <Typography variant="caption" sx={{ fontSize: '0.5rem', color: '#666', textAlign: 'center' }}>
-                  +{users.length - 2} người khác
+              {displayUsers.length > 2 && (
+                <Typography variant="caption" sx={{ fontSize: '0.5rem', color: cellTheme.text, textAlign: 'center', opacity: 0.85 }}>
+                  +{displayUsers.length - 2} người khác
                 </Typography>
               )}
             </Box>
@@ -2025,19 +2108,22 @@ const [trucThayDialog, setTrucThayDialog] = useState({
               )}
             
               {userCell && (
-                <Chip 
-                  size="small" 
+                <Chip
+                  size="small"
                   label={userCell.display_status || statusLabel[userCell.trang_thai] || userCell.trang_thai}
-                  sx={{ 
-                    height: '16px', 
-                    fontSize: '0.5rem', 
+                  sx={{
+                    height: '16px',
+                    fontSize: '0.5rem',
                     fontWeight: 'bold',
-                    backgroundColor: userCell.truc_thay_type === 'performer' ? '#ff9800' : 
-                                   userCell.truc_thay_type === 'receiver' ? '#4caf50' : 
-                                   (statusColor[userCell.trang_thai] || '#e0e0e0'),
-                    color: userCell.truc_thay_type === 'performer' ? 'white' : 
-                           userCell.truc_thay_type === 'receiver' ? 'white' : 'inherit',
-                    border: userCell.ma_nhan_vien === auth?.employee?.ma_nhan_vien ? '1px solid #1976d2' : 'none'
+                    backgroundColor: userCell.truc_thay_type === 'performer' ? '#ff9800' :
+                                   userCell.truc_thay_type === 'receiver' ? '#4caf50' :
+                                   'rgba(255,255,255,0.75)',
+                    color: userCell.truc_thay_type === 'performer' ? 'white' :
+                           userCell.truc_thay_type === 'receiver' ? 'white' : cellTheme.text,
+                    border: userCell.truc_thay_type ? 'none' : `1px solid ${cellTheme.border}`,
+                    ...(userCell.ma_nhan_vien === auth?.employee?.ma_nhan_vien && !userCell.truc_thay_type && {
+                      border: '1.5px solid #1976d2'
+                    })
                   }}
                 />
               )}
@@ -2157,10 +2243,26 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     );
   };
 
+  // Bảng trực thay của tôi trong tháng đang xem: tổng số giờ mình đã trực thay cho từng người,
+  // để người đó thanh toán lại (giờ này đã được cộng vào bảng công chính của họ, không phải của mình).
+  const myTrucThayLedger = useMemo(() => {
+    const map = {};
+    myTrucThayShifts.forEach((shift) => {
+      if (shift.trang_thai !== 'checked_out') return;
+      const d = new Date(shift.ngay);
+      if (d.getMonth() + 1 !== month || d.getFullYear() !== year) return;
+      const key = shift.ma_nguoi_dang_ky || shift.ten_nguoi_dang_ky;
+      if (!map[key]) map[key] = { name: shift.ten_nguoi_dang_ky, hours: 0, count: 0 };
+      map[key].hours += Number(shift.thoi_gian_lam) || 0;
+      map[key].count += 1;
+    });
+    return Object.values(map).sort((a, b) => b.hours - a.hours);
+  }, [myTrucThayShifts, month, year]);
+
   return (
-    <Box sx={{ 
-      display: 'flex', 
-      flexDirection: 'column', 
+    <Box sx={{
+      display: 'flex',
+      flexDirection: 'column',
       height: 'calc(100vh - 48px)',
       overflow: 'hidden'
     }}>
@@ -2300,41 +2402,53 @@ const [trucThayDialog, setTrucThayDialog] = useState({
             </Button>
             
             <Box sx={{ display: 'flex', gap: 0.5 }}>
-              <Chip 
-                size="small" 
-                label="Đã đăng ký" 
-                sx={{ 
-                  backgroundColor: '#c8e6c9', 
+              <Chip
+                size="small"
+                label="Đã đăng ký"
+                sx={{
+                  backgroundColor: STATUS_THEME.registered.bg,
+                  color: STATUS_THEME.registered.text,
+                  border: `1px solid ${STATUS_THEME.registered.border}`,
+                  fontWeight: 'bold',
                   fontSize: '0.65rem',
                   height: '20px'
-                }} 
+                }}
               />
-              <Chip 
-                size="small" 
-                label="Đang làm" 
-                sx={{ 
-                  backgroundColor: '#fff9c4', 
+              <Chip
+                size="small"
+                label="Đang làm"
+                sx={{
+                  backgroundColor: STATUS_THEME.checked_in.bg,
+                  color: STATUS_THEME.checked_in.text,
+                  border: `1px solid ${STATUS_THEME.checked_in.border}`,
+                  fontWeight: 'bold',
                   fontSize: '0.65rem',
                   height: '20px'
-                }} 
+                }}
               />
-              <Chip 
-                size="small" 
-                label="Hoàn thành" 
-                sx={{ 
-                  backgroundColor: '#bbdefb', 
+              <Chip
+                size="small"
+                label="Hoàn thành"
+                sx={{
+                  backgroundColor: STATUS_THEME.checked_out.bg,
+                  color: STATUS_THEME.checked_out.text,
+                  border: `1px solid ${STATUS_THEME.checked_out.border}`,
+                  fontWeight: 'bold',
                   fontSize: '0.65rem',
                   height: '20px'
-                }} 
+                }}
               />
-              <Chip 
-                size="small" 
-                label="CN" 
-                sx={{ 
-                  backgroundColor: '#fff9e6', 
+              <Chip
+                size="small"
+                label="CN"
+                sx={{
+                  backgroundColor: '#fff3f0',
+                  color: '#c62828',
+                  border: '1px solid #ffab91',
+                  fontWeight: 'bold',
                   fontSize: '0.65rem',
                   height: '20px'
-                }} 
+                }}
               />
               <Chip 
                 size="small" 
@@ -2597,24 +2711,62 @@ const [trucThayDialog, setTrucThayDialog] = useState({
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SwapHorizIcon color="warning" />
                 <Typography variant="h6" color="warning.main">
-                  📋 Ca trực thay của bạn ({myTrucThayShifts.length})
+                  📋 Ca trực thay của bạn ({myTrucThayShifts.length + myReceivedTrucThayShifts.length})
                 </Typography>
               </Box>
             </DialogTitle>
             
             <DialogContent>
-              {myTrucThayShifts.length === 0 ? (
-                <Box sx={{ textAlign: 'center', py: 4 }}>
-                  <SwapHorizIcon sx={{ fontSize: 48, color: '#e0e0e0', mb: 2 }} />
-                  <Typography variant="body1" color="text.secondary" gutterBottom>
-                    Bạn chưa có ca trực thay nào
+              {myTrucThayLedger.length > 0 && (
+                <Box
+                  sx={{
+                    mb: 2,
+                    p: 1.5,
+                    borderRadius: 1.5,
+                    border: '1px solid #ffe0b2',
+                    backgroundColor: '#fff8ef'
+                  }}
+                >
+                  <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1 }}>
+                    🧾 Bảng trực thay tháng {month}/{year} - để thanh toán lại
                   </Typography>
+                  <Stack spacing={0.75}>
+                    {myTrucThayLedger.map((row) => (
+                      <Box
+                        key={row.name}
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        <Typography variant="body2">
+                          Trực thay cho <strong>{row.name}</strong> ({row.count} ca)
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={`${row.hours.toFixed(2)}h ≈ ${(row.hours * 22000).toLocaleString('vi-VN')}đ`}
+                          sx={{ bgcolor: '#ff9800', color: 'white', fontWeight: 'bold' }}
+                        />
+                      </Box>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
+
+              <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1 }}>
+                🙋 Ca bạn đã trực thay cho người khác ({myTrucThayShifts.length})
+              </Typography>
+              {myTrucThayShifts.length === 0 ? (
+                <Box sx={{ textAlign: 'center', py: 3 }}>
+                  <SwapHorizIcon sx={{ fontSize: 40, color: '#e0e0e0', mb: 1 }} />
                   <Typography variant="body2" color="text.secondary">
-                    Nhấn nút "TRỰC THAY" trên ca của người khác để đăng ký
+                    Bạn chưa trực thay cho ai. Nhấn nút "TRỰC THAY" trên ca của người khác để đăng ký.
                   </Typography>
                 </Box>
               ) : (
-                <List sx={{ maxHeight: 400, overflow: 'auto' }}>
+                <List sx={{ maxHeight: 300, overflow: 'auto' }}>
                   {myTrucThayShifts.map((shift, index) => (
                     <ListItem
                       key={shift.id}
@@ -2720,16 +2872,17 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                                 ⏰ Ra: {shift.gio_ra.substring(0, 5)} | Thời gian: {shift.thoi_gian_lam} giờ
                               </Typography>
                             )}
-                            <Alert 
-                              severity="warning" 
-                              sx={{ 
-                                mt: 1, 
-                                py: 0, 
+                            <Alert
+                              severity="info"
+                              sx={{
+                                mt: 1,
+                                py: 0,
                                 fontSize: '0.75rem',
-                                backgroundColor: '#fff3e0'
+                                backgroundColor: '#e8f5e8'
                               }}
                             >
-                              ⚠️ Giờ làm tính cho bạn!
+                              ℹ️ Giờ này tính vào bảng công của <strong>{shift.ten_nguoi_dang_ky}</strong> —
+                              họ sẽ thanh toán lại giờ này cho bạn.
                             </Alert>
                           </Box>
                         }
@@ -2738,8 +2891,97 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                   ))}
                 </List>
               )}
+
+              <Divider sx={{ my: 2 }} />
+
+              <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1 }}>
+                🙌 Ca của bạn được người khác trực thay ({myReceivedTrucThayShifts.length})
+              </Typography>
+              {myReceivedTrucThayShifts.length === 0 ? (
+                <Box sx={{ textAlign: 'center', py: 3 }}>
+                  <SwapHorizIcon sx={{ fontSize: 40, color: '#e0e0e0', mb: 1 }} />
+                  <Typography variant="body2" color="text.secondary">
+                    Chưa có ai trực thay ca nào của bạn.
+                  </Typography>
+                </Box>
+              ) : (
+                <List sx={{ maxHeight: 300, overflow: 'auto' }}>
+                  {myReceivedTrucThayShifts.map((shift, index) => (
+                    <ListItem
+                      key={shift.id}
+                      sx={{
+                        borderBottom: '1px solid #f0f0f0',
+                        backgroundColor: index % 2 === 0 ? '#fafafa' : 'white',
+                        borderRadius: 1,
+                        mb: 1,
+                        alignItems: 'flex-start'
+                      }}
+                    >
+                      <ListItemAvatar>
+                        <Avatar sx={{ bgcolor: '#4caf50' }}>
+                          <SwapHorizIcon />
+                        </Avatar>
+                      </ListItemAvatar>
+                      <ListItemText
+                        primary={
+                          <Box>
+                            <Typography variant="subtitle2" fontWeight="bold">
+                              {SHIFTS.find(s => s.key === shift.ca)?.label} - {shift.ngay ? new Date(shift.ngay).toLocaleDateString('vi-VN') : ''}
+                            </Typography>
+                            <Chip
+                              size="small"
+                              label={
+                                shift.trang_thai === 'registered' ? 'Chưa bắt đầu' :
+                                shift.trang_thai === 'checked_in' ? 'Đang làm' :
+                                shift.trang_thai === 'checked_out' ? 'Hoàn thành' : shift.trang_thai
+                              }
+                              color={
+                                shift.trang_thai === 'registered' ? 'default' :
+                                shift.trang_thai === 'checked_in' ? 'primary' :
+                                shift.trang_thai === 'checked_out' ? 'success' : 'default'
+                              }
+                              sx={{ height: 20, fontSize: '0.65rem', mt: 0.5 }}
+                            />
+                          </Box>
+                        }
+                        secondary={
+                          <Box sx={{ mt: 1 }}>
+                            <Typography variant="body2" color="text.primary">
+                              Được trực thay bởi: <strong>{shift.ten_nguoi_truc_thay}</strong> ({shift.ma_nguoi_truc_thay})
+                            </Typography>
+                            {shift.ly_do && (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontStyle: 'italic' }}>
+                                Lý do: {shift.ly_do}
+                              </Typography>
+                            )}
+                            {shift.gio_vao && (
+                              <Typography variant="caption" color="primary" sx={{ display: 'block', mt: 0.5 }}>
+                                ⏰ Vào: {shift.gio_vao.substring(0, 5)}
+                              </Typography>
+                            )}
+                            {shift.gio_ra && (
+                              <Typography variant="caption" color="primary" sx={{ display: 'block' }}>
+                                ⏰ Ra: {shift.gio_ra.substring(0, 5)} | Thời gian: {shift.thoi_gian_lam} giờ
+                              </Typography>
+                            )}
+                            {shift.trang_thai === 'checked_out' && (
+                              <Alert
+                                severity="warning"
+                                sx={{ mt: 1, py: 0, fontSize: '0.75rem', backgroundColor: '#fff3e0' }}
+                              >
+                                ⚠️ Giờ này đã cộng vào bảng công của bạn — hãy thanh toán lại cho{' '}
+                                <strong>{shift.ten_nguoi_truc_thay}</strong>.
+                              </Alert>
+                            )}
+                          </Box>
+                        }
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              )}
             </DialogContent>
-            
+
             <DialogActions sx={{ px: 3, pb: 2 }}>
               <Button onClick={closeDetailDialog} color="inherit">
                 Đóng
@@ -3580,7 +3822,49 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                   </Grid>
                 </CardContent>
               </Card>
-              
+
+              {/* Bảng trực thay: ai đã trực thay cho mình trong tháng, cần thanh toán lại bao nhiêu */}
+              {monthlyReportDialog.report.substitution_summary?.length > 0 && (
+                <Card sx={{ mb: 3, backgroundColor: '#fff8ef', border: '1px solid #ffe0b2' }}>
+                  <CardContent>
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+                      <SwapHorizIcon color="warning" fontSize="small" />
+                      <Typography variant="subtitle1" fontWeight="bold">
+                        🔄 Được trực thay tháng {monthlyReportDialog.month}/{monthlyReportDialog.year}
+                      </Typography>
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+                      Số giờ dưới đây đã được cộng vào tổng thời gian tháng của bạn ở trên.
+                      Bạn cần thanh toán lại số giờ này cho người đã trực thay.
+                    </Typography>
+                    <Stack spacing={1}>
+                      {monthlyReportDialog.report.substitution_summary.map((row) => (
+                        <Box
+                          key={row.ma_nguoi_truc_thay}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            p: 1,
+                            borderRadius: 1,
+                            backgroundColor: 'white'
+                          }}
+                        >
+                          <Typography variant="body2">
+                            <strong>{row.ten_nguoi_truc_thay}</strong> đã trực thay cho bạn ({row.so_ca} ca)
+                          </Typography>
+                          <Chip
+                            size="small"
+                            label={`${Number(row.tong_gio).toFixed(2)}h ≈ ${(Number(row.tong_gio) * 22000).toLocaleString('vi-VN')}đ`}
+                            sx={{ bgcolor: '#ff9800', color: 'white', fontWeight: 'bold' }}
+                          />
+                        </Box>
+                      ))}
+                    </Stack>
+                  </CardContent>
+                </Card>
+              )}
+
               <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
                 Chi tiết theo ngày:
               </Typography>
@@ -3616,9 +3900,9 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                           <TableCell>
                             <Typography variant="caption">
                               {dayReport.chi_tiet_ca ? dayReport.chi_tiet_ca.split(';').map(ca => {
-                                const [caName, hours] = ca.split(':');
+                                const [caName, hours, , , nguoiTrucThay] = ca.split('|');
                                 const shiftName = SHIFTS.find(s => s.key === caName)?.label || caName;
-                                return `${shiftName}: ${Number(hours).toFixed(1)}h`;
+                                return `${shiftName}: ${Number(hours).toFixed(1)}h${nguoiTrucThay ? ` (${nguoiTrucThay} trực thay)` : ''}`;
                               }).join(', ') : '--'}
                             </Typography>
                           </TableCell>

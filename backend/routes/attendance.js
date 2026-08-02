@@ -41,18 +41,60 @@ const SHIFTS = [
 ];
 
 // Helper: tổng giờ làm trong tháng của 1 nhân viên
+// LƯU Ý: khi ca của một người được người khác trực thay, giờ làm được TÍNH CHO NGƯỜI ĐĂNG KÝ GỐC
+// (người sẽ được thanh toán), không tính cho người trực tiếp bấm check-in/out (người trực thay).
 const getMonthlyHours = async (ma_nhan_vien, month, year) => {
   const [rows] = await db.query(
-    `SELECT COALESCE(SUM(thoi_gian_lam), 0) AS total_hours
-     FROM lich_truc
-     WHERE ma_nhan_vien = ?
-       AND MONTH(ngay) = ?
-       AND YEAR(ngay) = ?
-       AND thoi_gian_lam IS NOT NULL`,
-    [ma_nhan_vien, month, year]
+    `SELECT COALESCE(SUM(effective_hours), 0) AS total_hours FROM (
+      -- Ca tự làm: KHÔNG phải ca ảo đi trực thay cho ai khác, và KHÔNG phải ca gốc đã bị
+      -- người khác trực thay (dù giờ đã được đồng bộ sang dòng gốc lúc check-out hay chưa)
+      SELECT lt.thoi_gian_lam AS effective_hours
+      FROM lich_truc lt
+      LEFT JOIN truc_thay tt ON (tt.lich_truc_ao_id = lt.id OR tt.lich_truc_goc_id = lt.id)
+        AND tt.trang_thai IN ('active', 'completed')
+      WHERE lt.ma_nhan_vien = ? AND MONTH(lt.ngay) = ? AND YEAR(lt.ngay) = ?
+        AND lt.trang_thai = 'checked_out' AND lt.thoi_gian_lam IS NOT NULL
+        AND NOT (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id)
+        AND NOT (tt.id IS NOT NULL AND tt.lich_truc_goc_id = lt.id)
+
+      UNION ALL
+
+      -- Ca được người khác trực thay cho mình (mình là người đăng ký gốc) - lấy giờ từ ca ẢO
+      SELECT lt.thoi_gian_lam AS effective_hours
+      FROM lich_truc lt
+      INNER JOIN truc_thay tt ON tt.lich_truc_ao_id = lt.id AND tt.trang_thai IN ('active', 'completed')
+      INNER JOIN nhanvien nv ON tt.nguoi_dang_ky_id = nv.id
+      WHERE nv.ma_nhan_vien = ? AND MONTH(lt.ngay) = ? AND YEAR(lt.ngay) = ?
+        AND lt.trang_thai = 'checked_out' AND lt.thoi_gian_lam IS NOT NULL
+    ) combined`,
+    [ma_nhan_vien, month, year, ma_nhan_vien, month, year]
   );
   return Number(rows[0]?.total_hours || 0);
 };
+
+// Đoạn subquery dùng lại ở nhiều API: tổng giờ làm "hiệu lực" (đã quy đổi trực thay) của một
+// nhân viên, dùng trong ngữ cảnh mà bảng nhân viên ngoài cùng được alias là `nv` và có thể
+// chèn thêm điều kiện lọc tháng/năm qua tham số `extraDateFilter` (áp lên cả 2 vế UNION).
+const effectiveHoursSubquery = (extraDateFilter = '') => `(
+  (
+    SELECT COALESCE(SUM(lt.thoi_gian_lam), 0)
+    FROM lich_truc lt
+    LEFT JOIN truc_thay tt ON (tt.lich_truc_ao_id = lt.id OR tt.lich_truc_goc_id = lt.id)
+      AND tt.trang_thai IN ('active', 'completed')
+    WHERE lt.nhan_vien_id = nv.id
+      AND NOT (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id)
+      AND NOT (tt.id IS NOT NULL AND tt.lich_truc_goc_id = lt.id)
+      AND lt.trang_thai = 'checked_out' AND lt.thoi_gian_lam IS NOT NULL ${extraDateFilter}
+  )
+  +
+  (
+    SELECT COALESCE(SUM(lt2.thoi_gian_lam), 0)
+    FROM lich_truc lt2
+    INNER JOIN truc_thay tt2 ON tt2.lich_truc_ao_id = lt2.id AND tt2.trang_thai IN ('active', 'completed')
+    WHERE tt2.nguoi_dang_ky_id = nv.id
+      AND lt2.trang_thai = 'checked_out' AND lt2.thoi_gian_lam IS NOT NULL ${extraDateFilter.replaceAll('lt.', 'lt2.')}
+  )
+)`;
 
 // Hàm kiểm tra xem có thể check-out không (LUÔN CHO PHÉP GỬI YÊU CẦU CHO QUÁ KHỨ)
 const canCheckOut = (cell) => {
@@ -234,15 +276,15 @@ router.post('/admin/reset-password', auth, requireAdmin, async (req, res) => {
 router.get('/admin/employees', auth, requireAdmin, async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT 
+      `SELECT
         nv.*,
         (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = nv.id) as total_registered_shifts,
         (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = nv.id AND trang_thai = 'checked_out') as total_completed_shifts,
-        (SELECT COALESCE(SUM(thoi_gian_lam), 0) FROM lich_truc WHERE nhan_vien_id = nv.id AND trang_thai = 'checked_out') as total_work_hours
+        ${effectiveHoursSubquery()} as total_work_hours
       FROM nhanvien nv
       ORDER BY nv.created_at DESC`
     );
-    
+
     res.json(rows);
   } catch (error) {
     console.error('Lỗi lấy danh sách nhân viên:', error);
@@ -361,10 +403,17 @@ router.get('/admin/employee/:id/attendance', auth, requireAdmin, async (req, res
 
   try {
     const [rows] = await db.query(
-      `SELECT 
-        lt.*,
+      `SELECT
+        lt.id, lt.ngay, lt.ca, lt.trang_thai, lt.gio_vao, lt.gio_ra, lt.thoi_gian_lam, lt.ghi_chu,
+        lt.created_at, lt.updated_at,
         DATE(lt.ngay) as ngay_thang,
-        
+
+        -- Quy đổi chủ sở hữu ca: nếu là ca ảo (được người khác trực thay), tên/mã hiển thị
+        -- là NGƯỜI ĐĂNG KÝ GỐC (được thanh toán), không phải người trực tiếp làm
+        CASE WHEN tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id THEN nv_dang_ky.ten_nhan_vien ELSE lt.ten_nhan_vien END as ten_nhan_vien,
+        CASE WHEN tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id THEN nv_dang_ky.ma_nhan_vien ELSE lt.ma_nhan_vien END as ma_nhan_vien,
+        CASE WHEN tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id THEN nv_dang_ky.id ELSE lt.nhan_vien_id END as nhan_vien_id,
+
         -- Thông tin trực thay (nếu có)
         tt.id as truc_thay_id,
         tt.nguoi_dang_ky_id,
@@ -373,41 +422,54 @@ router.get('/admin/employee/:id/attendance', auth, requireAdmin, async (req, res
         tt.lich_truc_ao_id,
         tt.ly_do as truc_thay_ly_do,
         tt.trang_thai as truc_thay_trang_thai,
-        
+
         -- Thông tin người thực hiện trực thay (B) - dành cho lịch gốc
         nv_thuc_hien.ten_nhan_vien as ten_nguoi_truc_thay,
         nv_thuc_hien.ma_nhan_vien as ma_nguoi_truc_thay,
-        
+
         -- Thông tin người đăng ký gốc (A) - dành cho lịch ảo
         nv_dang_ky.ten_nhan_vien as ten_nguoi_duoc_truc_thay,
         nv_dang_ky.ma_nhan_vien as ma_nguoi_duoc_truc_thay,
-        
+
         -- Xác định loại lịch
-        CASE 
+        CASE
           WHEN tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id THEN 'virtual'
           WHEN tt.id IS NOT NULL AND tt.lich_truc_goc_id = lt.id THEN 'original'
           ELSE 'normal'
         END as loai_lich
-        
+
       FROM lich_truc lt
       LEFT JOIN truc_thay tt ON (lt.id = tt.lich_truc_goc_id OR lt.id = tt.lich_truc_ao_id)
         AND tt.trang_thai IN ('active', 'completed')
       LEFT JOIN nhanvien nv_thuc_hien ON tt.nguoi_thuc_hien_id = nv_thuc_hien.id
       LEFT JOIN nhanvien nv_dang_ky ON tt.nguoi_dang_ky_id = nv_dang_ky.id
-      
-      WHERE lt.nhan_vien_id = ?
+
+      WHERE
+        (
+          -- Ca của chính nhân viên này: KHÔNG PHẢI ca ảo đi trực thay cho người khác, và
+          -- KHÔNG PHẢI ca gốc đã bị người khác trực thay (dù giờ đã đồng bộ sang dòng gốc
+          -- lúc check-out hay chưa - tránh đếm trùng giờ 2 lần)
+          (
+            lt.nhan_vien_id = ?
+            AND NOT (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id)
+            AND NOT (tt.id IS NOT NULL AND tt.lich_truc_goc_id = lt.id)
+          )
+          OR
+          -- Ca được người khác trực thay CHO nhân viên này (quy giờ về đây) - lấy từ ca ẢO
+          (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id AND tt.nguoi_dang_ky_id = ?)
+        )
         AND MONTH(lt.ngay) = ?
         AND YEAR(lt.ngay) = ?
         AND lt.trang_thai = 'checked_out'
         AND lt.thoi_gian_lam IS NOT NULL
-      ORDER BY lt.ngay DESC, 
+      ORDER BY lt.ngay DESC,
         CASE lt.ca
           WHEN 'ca1' THEN 1
           WHEN 'ca2' THEN 2
           WHEN 'ca3' THEN 3
           WHEN 'ca4' THEN 4
         END`,
-      [id, targetMonth, targetYear]
+      [id, id, targetMonth, targetYear]
     );
 
     // Format dates
@@ -424,7 +486,8 @@ router.get('/admin/employee/:id/attendance', auth, requireAdmin, async (req, res
 });
 
 // ======================
-// ADMIN API: LẤY CHI TIẾT CHẤM CÔNG NHÂN VIÊN
+// ADMIN API: LẤY CHI TIẾT CHẤM CÔNG NHÂN VIÊN (route trùng, không được gọi vì Express chỉ
+// dùng route /admin/employee/:id/attendance đầu tiên khớp phía trên - giữ nguyên không xoá)
 // ======================
 router.get('/admin/employee/:id/attendance', auth, requireAdmin, async (req, res) => {
   const { id } = req.params;
@@ -521,15 +584,14 @@ router.get('/admin/employee/:id/monthly-stats', auth, requireAdmin, async (req, 
 
   try {
     const [stats] = await db.query(
-      `SELECT 
+      `SELECT
         (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ?) as total_registered,
         (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ? AND trang_thai = 'checked_out') as total_completed,
-        COALESCE((SELECT SUM(thoi_gian_lam) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ? AND trang_thai = 'checked_out'), 0) as total_hours,
-        CASE 
+        CASE
           WHEN (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ?) > 0
           THEN ROUND(
-            (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ? AND trang_thai = 'checked_out') / 
-            (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ?) * 100, 
+            (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ? AND trang_thai = 'checked_out') /
+            (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = ? AND MONTH(ngay) = ? AND YEAR(ngay) = ?) * 100,
             2
           )
           ELSE 0
@@ -539,16 +601,17 @@ router.get('/admin/employee/:id/monthly-stats', auth, requireAdmin, async (req, 
         id, targetMonth, targetYear,
         id, targetMonth, targetYear,
         id, targetMonth, targetYear,
-        id, targetMonth, targetYear,
         id, targetMonth, targetYear
       ]
     );
 
-    res.json(stats[0] || {
-      total_registered: 0,
-      total_completed: 0,
-      total_hours: 0,
-      completion_rate: 0
+    // Tổng giờ làm đã quy đổi trực thay (giờ của ca được người khác trực thay tính về đây)
+    const [empRow] = await db.query('SELECT ma_nhan_vien FROM nhanvien WHERE id = ?', [id]);
+    const totalHours = empRow[0] ? await getMonthlyHours(empRow[0].ma_nhan_vien, targetMonth, targetYear) : 0;
+
+    res.json({
+      ...(stats[0] || { total_registered: 0, total_completed: 0, completion_rate: 0 }),
+      total_hours: totalHours
     });
   } catch (error) {
     console.error('Lỗi lấy thống kê tháng:', error);
@@ -589,15 +652,14 @@ router.get('/admin/employee/:id/detail', auth, requireAdmin, async (req, res) =>
       [id, targetMonth, targetYear]
     );
     
-    // Thống kê tháng
+    // Thống kê tháng (số ca theo lịch của chính nhân viên, giờ làm quy đổi theo trực thay bên dưới)
     const [statsRows] = await db.query(
-      `SELECT 
+      `SELECT
         COUNT(*) as total_registered,
         SUM(CASE WHEN trang_thai = 'checked_out' THEN 1 ELSE 0 END) as total_completed,
-        COALESCE(SUM(CASE WHEN trang_thai = 'checked_out' THEN thoi_gian_lam ELSE 0 END), 0) as total_hours,
         ROUND(
-          CASE 
-            WHEN COUNT(*) > 0 
+          CASE
+            WHEN COUNT(*) > 0
             THEN (SUM(CASE WHEN trang_thai = 'checked_out' THEN 1 ELSE 0 END) / COUNT(*)) * 100
             ELSE 0
           END, 2
@@ -608,7 +670,8 @@ router.get('/admin/employee/:id/detail', auth, requireAdmin, async (req, res) =>
         AND YEAR(ngay) = ?`,
       [id, targetMonth, targetYear]
     );
-    
+    const totalHoursEffective = await getMonthlyHours(employee.ma_nhan_vien, targetMonth, targetYear);
+
     // Lịch sử trực thay
     const [trucThayRows] = await db.query(
       `SELECT 
@@ -635,15 +698,13 @@ router.get('/admin/employee/:id/detail', auth, requireAdmin, async (req, res) =>
     res.json({
       employee,
       schedule: scheduleRows,
-      stats: statsRows[0] || {
-        total_registered: 0,
-        total_completed: 0,
-        total_hours: 0,
-        completion_rate: 0
+      stats: {
+        ...(statsRows[0] || { total_registered: 0, total_completed: 0, completion_rate: 0 }),
+        total_hours: totalHoursEffective
       },
       trucThayHistory: trucThayRows
     });
-    
+
   } catch (error) {
     console.error('Lỗi lấy chi tiết nhân viên:', error);
     res.status(500).json({ message: 'Lỗi server' });
@@ -660,7 +721,7 @@ router.get('/admin/registered-users', auth, requireAdmin, async (req, res) => {
         nv.*,
         (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = nv.id) as total_registered_shifts,
         (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = nv.id AND trang_thai = 'checked_out') as total_completed_shifts,
-        (SELECT COALESCE(SUM(thoi_gian_lam), 0) FROM lich_truc WHERE nhan_vien_id = nv.id AND trang_thai = 'checked_out') as total_work_hours
+        ${effectiveHoursSubquery()} as total_work_hours
       FROM nhanvien nv
       WHERE EXISTS (
         SELECT 1 FROM lich_truc WHERE nhan_vien_id = nv.id
@@ -692,15 +753,15 @@ router.get('/admin/registered-users/:id/detail', auth, requireAdmin, async (req,
       return res.status(404).json({ message: 'Không tìm thấy user' });
     }
     
-    // Thống kê tổng hợp
+    // Thống kê tổng hợp (giờ làm đã quy đổi trực thay về người đăng ký gốc)
     const [stats] = await db.query(
-      `SELECT 
-        COUNT(*) as total_registered,
-        SUM(CASE WHEN trang_thai = 'checked_out' THEN 1 ELSE 0 END) as total_completed,
-        COALESCE(SUM(CASE WHEN trang_thai = 'checked_out' THEN thoi_gian_lam ELSE 0 END), 0) as total_hours,
-        COUNT(DISTINCT DATE(ngay)) as total_days
-      FROM lich_truc
-      WHERE nhan_vien_id = ?`,
+      `SELECT
+        (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = nv.id) as total_registered,
+        (SELECT COUNT(*) FROM lich_truc WHERE nhan_vien_id = nv.id AND trang_thai = 'checked_out') as total_completed,
+        ${effectiveHoursSubquery()} as total_hours,
+        (SELECT COUNT(DISTINCT DATE(ngay)) FROM lich_truc WHERE nhan_vien_id = nv.id) as total_days
+      FROM nhanvien nv
+      WHERE nv.id = ?`,
       [id]
     );
     
@@ -785,358 +846,241 @@ router.delete('/admin/employee/:id/face-data', auth, requireAdmin, async (req, r
 // ======================
 // ADMIN API: XUẤT BÁO CÁO CHẤM CÔNG EXCEL
 // ======================
+const VN_WEEKDAYS = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+
 router.get('/admin/export/attendance-report', auth, requireAdmin, async (req, res) => {
-  const { month, year } = req.query;
-  const targetMonth = month || new Date().getMonth() + 1;
-  const targetYear = year || new Date().getFullYear();
+  const { month, year, rate } = req.query;
+  const targetMonth = parseInt(month, 10) || new Date().getMonth() + 1;
+  const targetYear = parseInt(year, 10) || new Date().getFullYear();
+  const hourlyRate = parseFloat(rate) || 22000;
 
   try {
-    // TỐI ƯU: Sử dụng Conditional Aggregation để tránh N+1 Query
-    const [reportRows] = await db.query(
-      `SELECT 
-        nv.ma_nhan_vien,
-        nv.ten_nhan_vien,
-        -- Đếm số ngày làm việc thực tế (chỉ tính những ca đã hoàn thành)
-        COUNT(DISTINCT CASE WHEN lt.trang_thai = 'checked_out' THEN DATE(lt.ngay) END) as work_days_count,
-        
-        -- Tổng số ca đã đăng ký trong tháng
-        COUNT(lt.id) as total_registered_shifts,
-        
-        -- Tổng số ca đã hoàn thành (check-out xong)
-        SUM(CASE WHEN lt.trang_thai = 'checked_out' AND lt.thoi_gian_lam IS NOT NULL THEN 1 ELSE 0 END) as total_completed_shifts,
-        
-        -- Tổng giờ làm
-        SUM(CASE WHEN lt.trang_thai = 'checked_out' THEN COALESCE(lt.thoi_gian_lam, 0) ELSE 0 END) as total_hours,
-        
-        -- Tỷ lệ hoàn thành: (Số ca hoàn thành / Số ca đăng ký) * 100
-        ROUND(
-          IFNULL(
-            (SUM(CASE WHEN lt.trang_thai = 'checked_out' AND lt.thoi_gian_lam IS NOT NULL THEN 1 ELSE 0 END) / 
-             NULLIF(COUNT(lt.id), 0)) * 100, 
-          0), 
-        2) as completion_rate
-
-      FROM nhanvien nv
-      LEFT JOIN lich_truc lt ON nv.id = lt.nhan_vien_id 
-        AND MONTH(lt.ngay) = ? 
-        AND YEAR(lt.ngay) = ?
-      GROUP BY nv.id, nv.ma_nhan_vien, nv.ten_nhan_vien
-      HAVING total_registered_shifts > 0 -- Chỉ xuất những người có lịch trực trong tháng
-      ORDER BY total_hours DESC, total_completed_shifts DESC`,
+    // Danh sách nhân viên có lịch trực trong tháng, theo thứ tự tạo tài khoản
+    const [employees] = await db.query(
+      `SELECT DISTINCT nv.id, nv.ma_nhan_vien, nv.ten_nhan_vien
+       FROM nhanvien nv
+       INNER JOIN lich_truc lt ON lt.nhan_vien_id = nv.id
+       WHERE MONTH(lt.ngay) = ? AND YEAR(lt.ngay) = ?
+       ORDER BY nv.id ASC`,
       [targetMonth, targetYear]
     );
 
-    // Phần lấy chi tiết từng ca (detailRows) giữ nguyên vì nó đã JOIN đơn giản
-    const [detailRows] = await db.query(
-      `SELECT 
-        lt.*,
-        nv.ma_nhan_vien,
-        nv.ten_nhan_vien,
-        DATE(lt.ngay) as ngay_thang
-      FROM lich_truc lt
-      INNER JOIN nhanvien nv ON lt.nhan_vien_id = nv.id
-      WHERE MONTH(lt.ngay) = ?
-        AND YEAR(lt.ngay) = ?
-        AND lt.trang_thai = 'checked_out'
-        AND lt.thoi_gian_lam IS NOT NULL
-      ORDER BY nv.ten_nhan_vien, lt.ngay ASC,
-        CASE lt.ca
-          WHEN 'ca1' THEN 1
-          WHEN 'ca2' THEN 2
-          WHEN 'ca3' THEN 3
-          WHEN 'ca4' THEN 4
-        END`,
+    // Toàn bộ lịch trực trong tháng (mọi trạng thái, để hiển thị đúng người trực từng ca)
+    const [shiftRows] = await db.query(
+      `SELECT lt.ngay, lt.ca, lt.nhan_vien_id, lt.ten_nhan_vien, lt.trang_thai,
+              lt.thoi_gian_lam, lt.ghi_chu
+       FROM lich_truc lt
+       WHERE MONTH(lt.ngay) = ? AND YEAR(lt.ngay) = ?`,
       [targetMonth, targetYear]
     );
 
-    // Tạo workbook Excel
+    const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+
+    // Gom dữ liệu theo từng ngày trong tháng
+    const byDate = {};
+    for (let d = 1; d <= daysInMonth; d++) {
+      byDate[d] = { ca1: [], ca2: [], ca3: [], ca4: [], hoursByEmployee: {}, notes: new Set() };
+    }
+
+    const totalHoursByEmployee = {};
+    employees.forEach(e => { totalHoursByEmployee[e.id] = 0; });
+
+    shiftRows.forEach(row => {
+      const d = new Date(row.ngay);
+      const bucket = byDate[d.getDate()];
+      if (!bucket) return;
+
+      if (bucket[row.ca]) bucket[row.ca].push(row.ten_nhan_vien);
+
+      if (row.trang_thai === 'checked_out' && row.thoi_gian_lam != null) {
+        const hrs = Number(row.thoi_gian_lam) || 0;
+        bucket.hoursByEmployee[row.nhan_vien_id] = (bucket.hoursByEmployee[row.nhan_vien_id] || 0) + hrs;
+        totalHoursByEmployee[row.nhan_vien_id] = (totalHoursByEmployee[row.nhan_vien_id] || 0) + hrs;
+      }
+
+      if (row.ghi_chu && row.ghi_chu.trim()) bucket.notes.add(row.ghi_chu.trim());
+    });
+
+    // ======================
+    // Tạo workbook đúng mẫu "Bảng chấm công CTV IT"
+    // ======================
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Hệ thống chấm công';
     workbook.created = new Date();
-    
-    // ======================
-    // SHEET 1: TỔNG HỢP NHÂN VIÊN
-    // ======================
-    const summarySheet = workbook.addWorksheet('Tổng hợp tháng');
-    
-    // Tiêu đề
-    summarySheet.mergeCells('A1:G1');
-    const titleRow = summarySheet.getRow(1);
-    titleRow.getCell(1).value = `BÁO CÁO CHẤM CÔNG THÁNG ${targetMonth}/${targetYear}`;
-    titleRow.getCell(1).font = { bold: true, size: 16, color: { argb: 'FF1976D2' } };
-    titleRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
-    titleRow.height = 30;
 
-    summarySheet.mergeCells('A2:G2');
-    const dateRow = summarySheet.getRow(2);
-    dateRow.getCell(1).value = `Ngày xuất báo cáo: ${new Date().toLocaleDateString('vi-VN')}`;
-    dateRow.getCell(1).font = { italic: true };
-    dateRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    const sheet = workbook.addWorksheet(`Tháng ${targetMonth}`);
 
-    // Header
-    const headers = ['STT', 'Mã nhân viên', 'Tên nhân viên', 'Số ngày làm', 'Số ca đã làm', 'Tổng giờ làm', 'Tỷ lệ hoàn thành (%)'];
-    const headerRow = summarySheet.getRow(4);
-    headers.forEach((header, index) => {
-      const cell = headerRow.getCell(index + 1);
-      cell.value = header;
-      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      cell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FF2E7D32' }
-      };
-      cell.alignment = { vertical: 'middle', horizontal: 'center' };
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' }
-      };
+    const numEmployees = Math.max(employees.length, 1);
+    const COL_NGAY = 1;
+    const COL_THU = 2;
+    const COL_CA1 = 3;
+    const COL_CA2 = 4;
+    const COL_CA3 = 5;
+    const COL_CA4 = 6;
+    const COL_HOURS_START = 7;
+    const COL_HOURS_END = COL_HOURS_START + numEmployees - 1;
+    const COL_NOTE = COL_HOURS_END + 1;
+    const COL_TOTAL_NAME = COL_NOTE + 1;
+    const COL_TOTAL_HOURS = COL_TOTAL_NAME + 1;
+    const COL_MONEY = COL_TOTAL_HOURS + 1;
+    const LAST_COL = COL_MONEY;
+
+    const thinBorder = {
+      top: { style: 'thin' }, left: { style: 'thin' },
+      bottom: { style: 'thin' }, right: { style: 'thin' }
+    };
+    const centerWrap = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+
+    // Dòng 1-2: Thông tin đơn vị (chỉ trải tới cột Ghi chú, giống mẫu gốc - không đè lên bảng tổng giờ làm)
+    sheet.mergeCells(1, COL_NGAY, 1, COL_NOTE);
+    sheet.getCell(1, COL_NGAY).value = 'Phân Hiệu Trường ĐH FPT tại Tỉnh Bình Định';
+    sheet.getCell(1, COL_NGAY).font = { bold: true, size: 12 };
+
+    sheet.mergeCells(2, COL_NGAY, 2, COL_NOTE);
+    sheet.getCell(2, COL_NGAY).value = 'Khu đô thị mới An Phú Thịnh, Phường Quy Nhơn Đông, Tỉnh Gia Lai, Việt Nam';
+
+    // Dòng 4: Tiêu đề bảng
+    sheet.mergeCells(4, COL_NGAY, 4, COL_NOTE);
+    const titleCell = sheet.getCell(4, COL_NGAY);
+    titleCell.value = `BẢNG CHẤM CÔNG CTV-IT THÁNG ${String(targetMonth).padStart(2, '0')}/${targetYear}`;
+    titleCell.font = { bold: true, size: 13 };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(4).height = 20;
+
+    // Dòng 5-6: Header của bảng
+    sheet.mergeCells(5, COL_NGAY, 6, COL_NGAY);
+    sheet.getCell(5, COL_NGAY).value = 'Ngày';
+    sheet.mergeCells(5, COL_THU, 6, COL_THU);
+    sheet.getCell(5, COL_THU).value = 'Thứ';
+    sheet.mergeCells(5, COL_CA1, 6, COL_CA1);
+    sheet.getCell(5, COL_CA1).value = 'Ca 1 (7:00-9:30)';
+    sheet.mergeCells(5, COL_CA2, 6, COL_CA2);
+    sheet.getCell(5, COL_CA2).value = 'Ca 2 (9:30-12:30)';
+    sheet.mergeCells(5, COL_CA3, 6, COL_CA3);
+    sheet.getCell(5, COL_CA3).value = 'Ca 3 (12:30-15:00)';
+    sheet.mergeCells(5, COL_CA4, 6, COL_CA4);
+    sheet.getCell(5, COL_CA4).value = 'Ca 4 (15:00-17:30)';
+
+    sheet.mergeCells(5, COL_HOURS_START, 5, COL_HOURS_END);
+    sheet.getCell(5, COL_HOURS_START).value = 'Số giờ làm được trong ngày(giờ)';
+    employees.forEach((emp, idx) => {
+      sheet.getCell(6, COL_HOURS_START + idx).value = emp.ten_nhan_vien;
     });
-    headerRow.height = 25;
 
-    // Dữ liệu
-    reportRows.forEach((row, index) => {
-      const dataRow = summarySheet.getRow(index + 5);
-      
-      dataRow.getCell(1).value = index + 1;
-      dataRow.getCell(2).value = row.ma_nhan_vien;
-      dataRow.getCell(3).value = row.ten_nhan_vien;
-      dataRow.getCell(4).value = row.work_days_count;
-      dataRow.getCell(5).value = row.total_shifts;
-      dataRow.getCell(6).value = parseFloat(row.total_hours).toFixed(2);
-      dataRow.getCell(7).value = parseFloat(row.completion_rate).toFixed(2);
-      
-      // Căn giữa các cột số
-      [1, 4, 5, 6, 7].forEach(col => {
-        dataRow.getCell(col).alignment = { vertical: 'middle', horizontal: 'center' };
+    sheet.mergeCells(5, COL_NOTE, 6, COL_NOTE);
+    sheet.getCell(5, COL_NOTE).value = 'Ghi chú';
+
+    sheet.mergeCells(5, COL_TOTAL_NAME, 5, COL_TOTAL_HOURS);
+    sheet.getCell(5, COL_TOTAL_NAME).value = 'Tổng giờ làm(giờ)';
+
+    // Lưu ý: không merge dọc O5:O6 vì dòng 6 trở đi của cột này chứa dữ liệu "Thành tiền" từng nhân viên
+    sheet.getCell(5, COL_MONEY).value = 'Thành tiền (VNĐ)';
+
+    // Style vùng header Ngày..Ghi chú (dòng 5-6)
+    for (let r = 5; r <= 6; r++) {
+      for (let c = COL_NGAY; c <= COL_NOTE; c++) {
+        const cell = sheet.getCell(r, c);
+        cell.font = { bold: true };
+        cell.alignment = centerWrap;
+        cell.fill = headerFill;
+        cell.border = thinBorder;
+      }
+    }
+    // Style header "Tổng giờ làm" / "Thành tiền" (chỉ dòng 5, dòng 6 dành cho dữ liệu nhân viên)
+    [COL_TOTAL_NAME, COL_TOTAL_HOURS, COL_MONEY].forEach(c => {
+      const cell = sheet.getCell(5, c);
+      cell.font = { bold: true };
+      cell.alignment = centerWrap;
+      cell.fill = headerFill;
+      cell.border = thinBorder;
+    });
+    sheet.getRow(5).height = 32;
+    sheet.getRow(6).height = 18;
+
+    // Bảng tổng giờ làm mỗi nhân viên (cột Tổng giờ làm / Thành tiền), bắt đầu từ dòng 6
+    employees.forEach((emp, idx) => {
+      const r = 6 + idx;
+      const totalHrs = Number((totalHoursByEmployee[emp.id] || 0).toFixed(2));
+
+      const nameCell = sheet.getCell(r, COL_TOTAL_NAME);
+      nameCell.value = emp.ten_nhan_vien;
+      nameCell.font = { bold: true };
+      nameCell.border = thinBorder;
+
+      const hoursCell = sheet.getCell(r, COL_TOTAL_HOURS);
+      hoursCell.value = totalHrs;
+      hoursCell.alignment = { horizontal: 'center' };
+      hoursCell.border = thinBorder;
+
+      const moneyCell = sheet.getCell(r, COL_MONEY);
+      moneyCell.value = { formula: `${hoursCell.address}*${hourlyRate}` };
+      moneyCell.numFmt = '#,##0';
+      moneyCell.alignment = { horizontal: 'center' };
+      moneyCell.border = thinBorder;
+    });
+
+    // Dữ liệu từng ngày trong tháng (từ dòng 7)
+    const firstDataRow = 7;
+    for (let day = 1; day <= daysInMonth; day++) {
+      const rowIdx = firstDataRow + day - 1;
+      const dateObj = new Date(targetYear, targetMonth - 1, day);
+      const isSunday = dateObj.getDay() === 0;
+      const bucket = byDate[day];
+      const row = sheet.getRow(rowIdx);
+
+      row.getCell(COL_NGAY).value = `${day}/${targetMonth}/${targetYear}`;
+      row.getCell(COL_THU).value = VN_WEEKDAYS[dateObj.getDay()];
+      row.getCell(COL_CA1).value = bucket.ca1.join(', ');
+      row.getCell(COL_CA2).value = bucket.ca2.join(', ');
+      row.getCell(COL_CA3).value = bucket.ca3.join(', ');
+      row.getCell(COL_CA4).value = bucket.ca4.join(', ');
+
+      employees.forEach((emp, idx) => {
+        const hrs = bucket.hoursByEmployee[emp.id] || 0;
+        row.getCell(COL_HOURS_START + idx).value = Number(hrs.toFixed(2));
       });
-      
-      // Tô màu xen kẽ
-      if (index % 2 === 0) {
-        for (let i = 1; i <= 7; i++) {
-          dataRow.getCell(i).fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFF5F5F5' }
-          };
-        }
+
+      row.getCell(COL_NOTE).value = Array.from(bucket.notes).join('; ');
+
+      for (let c = COL_NGAY; c <= LAST_COL; c++) {
+        const cell = row.getCell(c);
+        cell.alignment = centerWrap;
+        cell.border = thinBorder;
+        if (isSunday) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
       }
-      
-      // Border
-      for (let i = 1; i <= 7; i++) {
-        dataRow.getCell(i).border = {
-          top: { style: 'thin' },
-          left: { style: 'thin' },
-          bottom: { style: 'thin' },
-          right: { style: 'thin' }
-        };
-      }
-    });
+      row.height = 18;
+    }
 
-    // Điều chỉnh độ rộng cột
-    summarySheet.columns = [
-      { width: 6 },   // STT
-      { width: 12 },  // Mã NV
-      { width: 25 },  // Tên NV
-      { width: 12 },  // Số ngày
-      { width: 12 },  // Số ca
-      { width: 12 },  // Tổng giờ
-      { width: 15 }   // Tỷ lệ
-    ];
+    // Độ rộng cột
+    sheet.getColumn(COL_NGAY).width = 11;
+    sheet.getColumn(COL_THU).width = 11;
+    sheet.getColumn(COL_CA1).width = 16;
+    sheet.getColumn(COL_CA2).width = 16;
+    sheet.getColumn(COL_CA3).width = 16;
+    sheet.getColumn(COL_CA4).width = 16;
+    for (let c = COL_HOURS_START; c <= COL_HOURS_END; c++) sheet.getColumn(c).width = 11;
+    sheet.getColumn(COL_NOTE).width = 26;
+    sheet.getColumn(COL_TOTAL_NAME).width = 13;
+    sheet.getColumn(COL_TOTAL_HOURS).width = 9;
+    sheet.getColumn(COL_MONEY).width = 16;
 
-    // ======================
-    // SHEET 2: CHI TIẾT TỪNG CA
-    // ======================
-    const detailSheet = workbook.addWorksheet('Chi tiết ca làm việc');
-    
-    // Tiêu đề
-    detailSheet.mergeCells('A1:J1');
-    const detailTitleRow = detailSheet.getRow(1);
-    detailTitleRow.getCell(1).value = `CHI TIẾT CA LÀM VIỆC THÁNG ${targetMonth}/${targetYear}`;
-    detailTitleRow.getCell(1).font = { bold: true, size: 16, color: { argb: 'FF1976D2' } };
-    detailTitleRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
-    detailTitleRow.height = 30;
+    // Chân bảng: chữ ký
+    const footerRow = firstDataRow + daysInMonth + 3;
+    sheet.mergeCells(footerRow, COL_THU, footerRow, COL_CA3);
+    sheet.getCell(footerRow, COL_THU).value = 'Cộng tác viên IT';
+    sheet.getCell(footerRow, COL_THU).alignment = { horizontal: 'center' };
+    sheet.getCell(footerRow, COL_THU).font = { bold: true };
 
-    // Header chi tiết
-    const detailHeaders = [
-      'STT', 'Mã NV', 'Tên nhân viên', 'Ngày làm việc', 'Ca làm việc', 
-      'Giờ vào', 'Giờ ra', 'Thời gian làm (giờ)', 'Thời gian làm (phút)', 'Trạng thái'
-    ];
-    
-    const detailHeaderRow = detailSheet.getRow(3);
-    detailHeaders.forEach((header, index) => {
-      const cell = detailHeaderRow.getCell(index + 1);
-      cell.value = header;
-      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      cell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FF1976D2' }
-      };
-      cell.alignment = { vertical: 'middle', horizontal: 'center' };
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' }
-      };
-    });
-    detailHeaderRow.height = 25;
+    sheet.mergeCells(footerRow, COL_HOURS_START, footerRow, COL_NOTE);
+    sheet.getCell(footerRow, COL_HOURS_START).value = 'Người lập biểu';
+    sheet.getCell(footerRow, COL_HOURS_START).alignment = { horizontal: 'center' };
+    sheet.getCell(footerRow, COL_HOURS_START).font = { bold: true };
 
-    // Dữ liệu chi tiết
-    detailRows.forEach((row, index) => {
-      const dataRow = detailSheet.getRow(index + 4);
-      
-      // Format ca làm việc
-      let caLabel = row.ca;
-      switch(row.ca) {
-        case 'ca1': caLabel = 'Ca 1: 7:00-9:30'; break;
-        case 'ca2': caLabel = 'Ca 2: 9:30-12:30'; break;
-        case 'ca3': caLabel = 'Ca 3: 12:30-15:00'; break;
-        case 'ca4': caLabel = 'Ca 4: 15:00-17:30'; break;
-      }
-      
-      // Format thời gian
-      const gioVao = row.gio_vao ? 
-        (typeof row.gio_vao === 'string' ? row.gio_vao.substring(0, 5) : row.gio_vao) : '';
-      const gioRa = row.gio_ra ? 
-        (typeof row.gio_ra === 'string' ? row.gio_ra.substring(0, 5) : row.gio_ra) : '';
-      
-      // Tính thời gian theo phút
-      const thoiGianLamPhut = Math.round((Number(row.thoi_gian_lam) || 0) * 60);
-      
-      dataRow.getCell(1).value = index + 1;
-      dataRow.getCell(2).value = row.ma_nhan_vien;
-      dataRow.getCell(3).value = row.ten_nhan_vien;
-      dataRow.getCell(4).value = row.ngay ? formatDateLocal(row.ngay) : '';
-      dataRow.getCell(5).value = caLabel;
-      dataRow.getCell(6).value = gioVao;
-      dataRow.getCell(7).value = gioRa;
-      dataRow.getCell(8).value = Number(row.thoi_gian_lam).toFixed(2);
-      dataRow.getCell(9).value = thoiGianLamPhut;
-      dataRow.getCell(10).value = 'Hoàn thành';
-      
-      // Căn giữa các cột
-      [1, 2, 4, 5, 6, 7, 8, 9, 10].forEach(col => {
-        dataRow.getCell(col).alignment = { vertical: 'middle', horizontal: 'center' };
-      });
-      
-      // Tô màu xen kẽ
-      if (index % 2 === 0) {
-        for (let i = 1; i <= 10; i++) {
-          dataRow.getCell(i).fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFF5F5F5' }
-          };
-        }
-      }
-      
-      // Border
-      for (let i = 1; i <= 10; i++) {
-        dataRow.getCell(i).border = {
-          top: { style: 'thin' },
-          left: { style: 'thin' },
-          bottom: { style: 'thin' },
-          right: { style: 'thin' }
-        };
-      }
-    });
+    sheet.views = [{ state: 'frozen', ySplit: 6 }];
 
-    // Điều chỉnh độ rộng cột
-    detailSheet.columns = [
-      { width: 6 },   // STT
-      { width: 10 },  // Mã NV
-      { width: 25 },  // Tên NV
-      { width: 15 },  // Ngày
-      { width: 20 },  // Ca
-      { width: 10 },  // Giờ vào
-      { width: 10 },  // Giờ ra
-      { width: 15 },  // Giờ làm
-      { width: 15 },  // Phút làm
-      { width: 12 }   // Trạng thái
-    ];
+    const filename = `BangChamCong_CTVIT_Thang${targetMonth}_${targetYear}.xlsx`;
 
-    // ======================
-    // SHEET 3: TỔNG KẾT
-    // ======================
-    const totalSheet = workbook.addWorksheet('Tổng kết tháng');
-    
-    // Tính tổng thống kê
-    let totalEmployees = reportRows.length;
-    let totalShifts = 0;
-    let totalHours = 0;
-    let employeesWithShifts = 0;
-
-    reportRows.forEach(emp => {
-      totalShifts += emp.total_shifts || 0;
-      totalHours += parseFloat(emp.total_hours || 0);
-      if (emp.total_shifts > 0) employeesWithShifts++;
-    });
-
-    const averageHours = employeesWithShifts > 0 ? totalHours / employeesWithShifts : 0;
-
-    // Tiêu đề
-    totalSheet.mergeCells('A1:B1');
-    totalSheet.getRow(1).getCell(1).value = 'TỔNG KẾT THÁNG';
-    totalSheet.getRow(1).getCell(1).font = { bold: true, size: 14, color: { argb: 'FF1976D2' } };
-    totalSheet.getRow(1).getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
-
-    // Dữ liệu tổng kết
-    const summaryData = [
-      ['Tháng báo cáo', `${targetMonth}/${targetYear}`],
-      ['Ngày xuất báo cáo', new Date().toLocaleDateString('vi-VN')],
-      ['Tổng số nhân viên', totalEmployees],
-      ['Số nhân viên có chấm công', employeesWithShifts],
-      ['Tổng số ca đã làm', totalShifts],
-      ['Tổng số giờ làm', totalHours.toFixed(2)],
-      ['Số giờ trung bình/người', averageHours.toFixed(2)],
-      ['Số ca trung bình/người', (totalShifts / (employeesWithShifts || 1)).toFixed(1)]
-    ];
-
-    summaryData.forEach((row, index) => {
-      const dataRow = totalSheet.getRow(index + 3);
-      dataRow.getCell(1).value = row[0];
-      dataRow.getCell(2).value = row[1];
-      
-      dataRow.getCell(1).font = { bold: true };
-      dataRow.getCell(2).alignment = { horizontal: 'center' };
-      
-      // Tô màu cho hàng tổng kết
-      if (index >= 2) {
-        dataRow.getCell(1).fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFF0F7FF' }
-        };
-        dataRow.getCell(2).fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFF0F7FF' }
-        };
-      }
-      
-      // Border
-      [1, 2].forEach(col => {
-        dataRow.getCell(col).border = {
-          top: { style: 'thin' },
-          left: { style: 'thin' },
-          bottom: { style: 'thin' },
-          right: { style: 'thin' }
-        };
-      });
-    });
-
-    // Điều chỉnh độ rộng
-    totalSheet.columns = [
-      { width: 25 },
-      { width: 20 }
-    ];
-
-    // Thiết lập headers để download file
-    const filename = `BaoCaoChamCong_Thang${targetMonth}_${targetYear}.xlsx`;
-    
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -1146,7 +1090,6 @@ router.get('/admin/export/attendance-report', auth, requireAdmin, async (req, re
       `attachment; filename="${encodeURIComponent(filename)}"`
     );
 
-    // Ghi workbook vào response
     await workbook.xlsx.write(res);
     res.end();
 
@@ -2358,9 +2301,84 @@ router.get('/truc-thay/my-shifts', auth, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Lỗi lấy ca trực thay:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: 'Lỗi server khi lấy ca trực thay',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ======================
+// API: Lấy danh sách ca CỦA TÔI đã được NGƯỜI KHÁC trực thay (chiều ngược lại của my-shifts)
+// ======================
+router.get('/truc-thay/received-shifts', auth, async (req, res) => {
+  const { ma_nhan_vien } = req.employee;
+
+  try {
+    const [employeeRows] = await db.query(
+      'SELECT id FROM nhanvien WHERE ma_nhan_vien = ?',
+      [ma_nhan_vien]
+    );
+
+    if (employeeRows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Nhân viên không tồn tại' });
+    }
+
+    const employee_id = employeeRows[0].id;
+
+    // Lấy ca ẢO (lịch_truc_ao) - nơi người thực hiện đã/đang làm thay cho mình
+    const [rows] = await db.query(
+      `SELECT
+        lt.id,
+        lt.ngay,
+        lt.ca,
+        lt.trang_thai,
+        lt.gio_vao,
+        lt.gio_ra,
+        lt.thoi_gian_lam,
+        tt.ly_do,
+        tt.created_at as thoi_gian_truc_thay,
+        tt.trang_thai as trang_thai_truc_thay,
+        nv_thuc_hien.ten_nhan_vien AS ten_nguoi_truc_thay,
+        nv_thuc_hien.ma_nhan_vien AS ma_nguoi_truc_thay,
+        tt.lich_truc_goc_id
+      FROM lich_truc lt
+      INNER JOIN truc_thay tt ON lt.id = tt.lich_truc_ao_id
+      INNER JOIN nhanvien nv_thuc_hien ON tt.nguoi_thuc_hien_id = nv_thuc_hien.id
+      WHERE tt.nguoi_dang_ky_id = ?
+        AND tt.trang_thai IN ('active', 'pending', 'completed')
+      ORDER BY lt.ngay DESC, lt.ca ASC`,
+      [employee_id]
+    );
+
+    const formattedRows = rows.map(row => ({
+      id: row.id,
+      ngay: row.ngay ? formatDateLocal(row.ngay) : null,
+      ca: row.ca,
+      trang_thai: row.trang_thai,
+      gio_vao: row.gio_vao,
+      gio_ra: row.gio_ra,
+      thoi_gian_lam: row.thoi_gian_lam,
+      ly_do: row.ly_do,
+      thoi_gian_truc_thay: row.thoi_gian_truc_thay,
+      ten_nguoi_truc_thay: row.ten_nguoi_truc_thay,
+      ma_nguoi_truc_thay: row.ma_nguoi_truc_thay,
+      lich_truc_goc_id: row.lich_truc_goc_id,
+      trang_thai_truc_thay: row.trang_thai_truc_thay
+    }));
+
+    res.json({
+      success: true,
+      data: formattedRows,
+      count: formattedRows.length
+    });
+
+  } catch (error) {
+    console.error('❌ Lỗi lấy ca được trực thay:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server khi lấy ca được trực thay',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -2542,10 +2560,23 @@ router.post('/truc-thay/checkin/:lich_truc_ao_id', auth, async (req, res) => {
     }
     
     if (virtualSchedule.trang_thai === 'checked_in') {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Bạn đã check-in rồi' 
+        message: 'Bạn đã check-in rồi'
       });
+    }
+
+    // 2b. KIỂM TRA CHƯA TỚI GIỜ LÀM (giống ca thường - trước đây thiếu nên check-in sớm được)
+    const shiftInfo = SHIFTS.find(s => s.key === virtualSchedule.ca);
+    if (shiftInfo) {
+      const recordDate = new Date(virtualSchedule.ngay).toISOString().split('T')[0];
+      const currentDate = now.toISOString().split('T')[0];
+      if (recordDate === currentDate && currentTime < shiftInfo.start) {
+        return res.status(400).json({
+          success: false,
+          message: `Chưa tới giờ làm! Check-in chỉ được thực hiện từ ${shiftInfo.start}`
+        });
+      }
     }
 
     // 3. BẮT ĐẦU TRANSACTION
@@ -3585,22 +3616,44 @@ router.get('/my/today-shifts', auth, async (req, res) => {
   const date = req.query.date || new Date().toISOString().split('T')[0];
 
   try {
-    // Lấy tất cả ca trong ngày đó (mọi nhân viên)
+    // Lấy tất cả ca trong ngày đó (mọi nhân viên), kèm thông tin trực thay (nếu có)
+    // để phân biệt ca thường / ca trực thay ngay trên tab "Hôm nay"
     const [allRows] = await db.query(
-      `SELECT lt.*, nv.ten_nhan_vien 
+      `SELECT
+        lt.*,
+        nv.ten_nhan_vien,
+        tt.id as truc_thay_id,
+        tt.lich_truc_ao_id,
+        nv_thuc_hien.ten_nhan_vien as ten_nguoi_truc_thay,
+        nv_thuc_hien.ma_nhan_vien as ma_nguoi_truc_thay,
+        nv_dang_ky.ten_nhan_vien as ten_nguoi_duoc_truc_thay,
+        nv_dang_ky.ma_nhan_vien as ma_nguoi_duoc_truc_thay,
+        CASE
+          WHEN tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id THEN 'virtual'
+          WHEN tt.id IS NOT NULL AND tt.lich_truc_goc_id = lt.id THEN 'original'
+          ELSE 'normal'
+        END as loai_lich
        FROM lich_truc lt
        JOIN nhanvien nv ON lt.nhan_vien_id = nv.id
+       LEFT JOIN truc_thay tt ON (lt.id = tt.lich_truc_goc_id OR lt.id = tt.lich_truc_ao_id)
+         AND tt.trang_thai IN ('active', 'pending', 'completed')
+       LEFT JOIN nhanvien nv_thuc_hien ON tt.nguoi_thuc_hien_id = nv_thuc_hien.id
+       LEFT JOIN nhanvien nv_dang_ky ON tt.nguoi_dang_ky_id = nv_dang_ky.id
        WHERE DATE(lt.ngay) = ?`,
       [date]
     );
 
-    // Lọc ra các ca của chính nhân viên đang đăng nhập
-    const myRows = allRows.filter(row => row.ma_nhan_vien === ma_nhan_vien);
+    // Lọc ra các ca của chính nhân viên đang đăng nhập, BỎ QUA ca "gốc" đã được người khác
+    // trực thay (loai_lich = 'original') vì người này không cần check-in/out cho ca đó nữa -
+    // việc check-in/out do người trực thay thực hiện qua ca "ảo" của họ.
+    const myRows = allRows.filter(row =>
+      row.ma_nhan_vien === ma_nhan_vien && row.loai_lich !== 'original'
+    );
 
     // Gom thông tin những người cùng ca
     const result = myRows.map(row => {
       const participants = allRows
-        .filter(r => r.ngay === row.ngay && r.ca === row.ca)
+        .filter(r => r.ngay === row.ngay && r.ca === row.ca && r.loai_lich !== 'original')
         .map(r => ({
           nhan_vien_id: r.nhan_vien_id,
           ma_nhan_vien: r.ma_nhan_vien,
@@ -3616,6 +3669,11 @@ router.get('/my/today-shifts', auth, async (req, res) => {
         gio_vao: row.gio_vao,
         gio_ra: row.gio_ra,
         thoi_gian_lam: row.thoi_gian_lam,
+        loai_lich: row.loai_lich,
+        is_truc_thay: row.loai_lich === 'virtual',
+        lich_truc_ao_id: row.lich_truc_ao_id,
+        ten_nguoi_duoc_truc_thay: row.ten_nguoi_duoc_truc_thay,
+        ma_nguoi_duoc_truc_thay: row.ma_nguoi_duoc_truc_thay,
         participants
       };
     });
@@ -4139,20 +4197,79 @@ router.get('/monthly-report', auth, async (req, res) => {
     const nhan_vien_id = empRows[0].id;
 
     // Lấy báo cáo theo tháng (CÓ GIỜ VÀO, GIỜ RA)
+    // Quy đổi chủ sở hữu: ca được người khác trực thay cho mình vẫn tính vào báo cáo này
+    // (giờ tính cho mình), kèm tên người đã trực thay trong chi_tiet_ca để biết cần trả ai.
     const [report] = await db.query(
-      `SELECT 
-        DATE(ngay) as ngay,
+      `SELECT
+        DATE(lt.ngay) as ngay,
         COUNT(*) as so_ca_da_lam,
-        SUM(thoi_gian_lam) as tong_thoi_gian_lam,
-        GROUP_CONCAT(CONCAT(ca, ':', thoi_gian_lam, ':', COALESCE(gio_vao, ''), ':', COALESCE(gio_ra, '')) SEPARATOR ';') as chi_tiet_ca
-      FROM lich_truc 
-      WHERE nhan_vien_id = ? 
-        AND MONTH(ngay) = ?
-        AND YEAR(ngay) = ?
-        AND trang_thai = 'checked_out'
-        AND thoi_gian_lam IS NOT NULL
-      GROUP BY DATE(ngay)
-      ORDER BY ngay DESC`,
+        SUM(lt.thoi_gian_lam) as tong_thoi_gian_lam,
+        GROUP_CONCAT(
+          CONCAT(lt.ca, '|', lt.thoi_gian_lam, '|', COALESCE(lt.gio_vao, ''), '|', COALESCE(lt.gio_ra, ''), '|', COALESCE(nv_thuc_hien.ten_nhan_vien, ''))
+          SEPARATOR ';'
+        ) as chi_tiet_ca
+      FROM lich_truc lt
+      LEFT JOIN truc_thay tt ON (tt.lich_truc_ao_id = lt.id OR tt.lich_truc_goc_id = lt.id)
+        AND tt.trang_thai IN ('active', 'completed')
+      LEFT JOIN nhanvien nv_thuc_hien ON tt.nguoi_thuc_hien_id = nv_thuc_hien.id
+      WHERE
+        (
+          (
+            lt.nhan_vien_id = ?
+            AND NOT (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id)
+            AND NOT (tt.id IS NOT NULL AND tt.lich_truc_goc_id = lt.id)
+          )
+          OR
+          (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id AND tt.nguoi_dang_ky_id = ?)
+        )
+        AND MONTH(lt.ngay) = ?
+        AND YEAR(lt.ngay) = ?
+        AND lt.trang_thai = 'checked_out'
+        AND lt.thoi_gian_lam IS NOT NULL
+      GROUP BY DATE(lt.ngay)
+      ORDER BY DATE(lt.ngay) DESC`,
+      [nhan_vien_id, nhan_vien_id, targetMonth, targetYear]
+    );
+
+    // Bảng trực thay: ai đã trực thay CHO MÌNH trong tháng và tổng bao nhiêu giờ -
+    // để mình biết cần thanh toán lại cho ai, bao nhiêu.
+    const [substitutionRows] = await db.query(
+      `SELECT
+        nv_thuc_hien.ten_nhan_vien as ten_nguoi_truc_thay,
+        nv_thuc_hien.ma_nhan_vien as ma_nguoi_truc_thay,
+        SUM(lt.thoi_gian_lam) as tong_gio,
+        COUNT(*) as so_ca
+      FROM lich_truc lt
+      INNER JOIN truc_thay tt ON tt.lich_truc_ao_id = lt.id AND tt.trang_thai IN ('active', 'completed')
+      INNER JOIN nhanvien nv_thuc_hien ON tt.nguoi_thuc_hien_id = nv_thuc_hien.id
+      WHERE tt.nguoi_dang_ky_id = ?
+        AND MONTH(lt.ngay) = ?
+        AND YEAR(lt.ngay) = ?
+        AND lt.trang_thai = 'checked_out'
+        AND lt.thoi_gian_lam IS NOT NULL
+      GROUP BY nv_thuc_hien.id
+      ORDER BY tong_gio DESC`,
+      [nhan_vien_id, targetMonth, targetYear]
+    );
+
+    // Bảng ngược lại: MÌNH đã trực thay CHO AI trong tháng và tổng bao nhiêu giờ -
+    // (giờ này KHÔNG nằm trong tong_thoi_gian_thang của mình, đã được tính cho người kia)
+    const [performedRows] = await db.query(
+      `SELECT
+        nv_dang_ky.ten_nhan_vien as ten_nguoi_duoc_truc_thay,
+        nv_dang_ky.ma_nhan_vien as ma_nguoi_duoc_truc_thay,
+        SUM(lt.thoi_gian_lam) as tong_gio,
+        COUNT(*) as so_ca
+      FROM lich_truc lt
+      INNER JOIN truc_thay tt ON tt.lich_truc_ao_id = lt.id AND tt.trang_thai IN ('active', 'completed')
+      INNER JOIN nhanvien nv_dang_ky ON tt.nguoi_dang_ky_id = nv_dang_ky.id
+      WHERE tt.nguoi_thuc_hien_id = ?
+        AND MONTH(lt.ngay) = ?
+        AND YEAR(lt.ngay) = ?
+        AND lt.trang_thai = 'checked_out'
+        AND lt.thoi_gian_lam IS NOT NULL
+      GROUP BY nv_dang_ky.id
+      ORDER BY tong_gio DESC`,
       [nhan_vien_id, targetMonth, targetYear]
     );
 
@@ -4178,7 +4295,19 @@ router.get('/monthly-report', auth, async (req, res) => {
         tong_so_ca: report.reduce((sum, day) => sum + day.so_ca_da_lam, 0),
         tong_thoi_gian_thang: monthlyTotal.toFixed(2),
         tong_thoi_gian_thang_gio: formatHours(monthlyTotal)
-      }
+      },
+      substitution_summary: substitutionRows.map(row => ({
+        ten_nguoi_truc_thay: row.ten_nguoi_truc_thay,
+        ma_nguoi_truc_thay: row.ma_nguoi_truc_thay,
+        tong_gio: Number(row.tong_gio).toFixed(2),
+        so_ca: row.so_ca
+      })),
+      performed_substitution_summary: performedRows.map(row => ({
+        ten_nguoi_duoc_truc_thay: row.ten_nguoi_duoc_truc_thay,
+        ma_nguoi_duoc_truc_thay: row.ma_nguoi_duoc_truc_thay,
+        tong_gio: Number(row.tong_gio).toFixed(2),
+        so_ca: row.so_ca
+      }))
     };
 
     res.json(result);

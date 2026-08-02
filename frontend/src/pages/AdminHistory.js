@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -139,6 +139,9 @@ const getEmployeeAbbr = (employee) => {
   return nameParts[nameParts.length - 1] || employee.ma_nhan_vien;
 };
 
+// Rút gọn tên đầy đủ (chuỗi thô, không phải object nhân viên) - dùng khi chỉ có tên người trực thay
+const abbrOfName = (fullName) => (fullName || '').trim().split(' ').pop();
+
 const EMPLOYEE_COLORS = [
   '#1976d2', '#d32f2f', '#388e3c', '#f9a825',
   '#7b1fa2', '#00838f', '#5d4037', '#c2185b',
@@ -150,12 +153,33 @@ const ensureCell = (ws, r, c) => {
   return ws[addr];
 };
 
+const setCellStyle = (ws, r, c, style) => {
+  const cell = ensureCell(ws, r, c);
+  cell.s = style;
+  return cell;
+};
+
+const THIN_BORDER = {
+  top: { style: 'thin' }, bottom: { style: 'thin' },
+  left: { style: 'thin' }, right: { style: 'thin' }
+};
+const CENTER_WRAP = { horizontal: 'center', vertical: 'center', wrapText: true };
+const HEADER_STYLE = {
+  font: { bold: true, color: { rgb: 'FFFFFF' } },
+  alignment: CENTER_WRAP,
+  fill: { fgColor: { rgb: '1976D2' } },
+  border: THIN_BORDER
+};
+
+// Xuất bảng chấm công CTV-IT đúng mẫu gốc: 2 dòng tiêu đề nhóm cột,
+// mỗi ngày 1 dòng, và bảng tổng giờ làm/thành tiền riêng theo từng nhân viên.
 const exportChamCongExcel = (
   attendanceData,
   employees,
   selectedEmployees,
   year,
-  month
+  month,
+  hourlyRate = 22000
 ) => {
   if (!attendanceData || selectedEmployees.length === 0) {
     alert('Không có dữ liệu để xuất Excel');
@@ -167,24 +191,21 @@ const exportChamCongExcel = (
     .filter(Boolean);
 
   const allDates = getAllDatesInMonth(year, month);
-  const dataMap = {};
+  const numEmployees = Math.max(sortedEmployees.length, 1);
 
+  const CA_NUMBER = { ca1: 1, ca2: 2, ca3: 3, ca4: 4 };
+  const abbrOf = (fullName) => (fullName || '').trim().split(' ').pop();
+
+  const dataMap = {};
   allDates.forEach(d => {
     dataMap[d] = {
-      ca1_names: [],
-      ca2_names: [],
-      ca3_names: [],
-      ca4_names: [],
-      ca1_display: '',
-      ca2_display: '',
-      ca3_display: '',
-      ca4_display: '',
-      ghi_chu: '',
-      total_hours: 0,
-      employee_hours: {},
-      note_details: []
+      ca1_names: [], ca2_names: [], ca3_names: [], ca4_names: [],
+      employee_hours: {}, substitutions: {}
     };
   });
+
+  const employeeTotals = {};
+  sortedEmployees.forEach(emp => { employeeTotals[emp.id] = 0; });
 
   sortedEmployees.forEach(emp => {
     const empAbbr = getEmployeeAbbr(emp);
@@ -199,200 +220,191 @@ const exportChamCongExcel = (
 
       const empHours = item.tong_gio || 0;
       row.employee_hours[emp.id] = (row.employee_hours[emp.id] || 0) + empHours;
-      row.total_hours += empHours;
+      employeeTotals[emp.id] = (employeeTotals[emp.id] || 0) + empHours;
 
-      if (empHours > 0) {
-        row.note_details.push(`${empAbbr}: ${empHours.toFixed(2)}h`);
-      }
+      // Ghi nhận trực thay: dữ liệu của `emp` (vd: Thiện) đã được quy đổi giờ công từ backend,
+      // nên khi gặp loai_lich 'virtual' (type 'was_substituted'), nghĩa là CHÍNH `emp` là người
+      // được trực thay (receiver), còn người thực hiện thực tế nằm ở trucThayInfo.nguoi_thuc_hien.
+      ['ca1', 'ca2', 'ca3', 'ca4'].forEach((caKey) => {
+        (item[`${caKey}_details`] || []).forEach((detail) => {
+          if (detail?.trucThayInfo?.type === 'was_substituted') {
+            const receiverAbbr = detail.name || empAbbr;
+            const performerAbbr = abbrOf(detail.trucThayInfo.nguoi_thuc_hien);
+            const key = `${caKey}|${receiverAbbr}`;
+            if (!row.substitutions[key]) {
+              row.substitutions[key] = { ca: caKey, receiver: receiverAbbr, performers: new Set() };
+            }
+            row.substitutions[key].performers.add(performerAbbr);
+          }
+        });
+      });
     });
   });
 
-  allDates.forEach(d => {
-    const row = dataMap[d];
-    row.ca1_display = row.ca1_names.length > 0 ? row.ca1_names.join(', ') : '';
-    row.ca2_display = row.ca2_names.length > 0 ? row.ca2_names.join(', ') : '';
-    row.ca3_display = row.ca3_names.length > 0 ? row.ca3_names.join(', ') : '';
-    row.ca4_display = row.ca4_names.length > 0 ? row.ca4_names.join(', ') : '';
-    
-    if (row.note_details.length > 0) {
-      row.ghi_chu = row.note_details.join('; ');
-    }
+  // Cột (0-indexed): Ngày, Thứ, Ca1-4, [giờ từng nhân viên], Ghi chú, Tổng-tên, Tổng-giờ, Thành tiền
+  const COL_NGAY = 0, COL_THU = 1, COL_CA1 = 2, COL_CA2 = 3, COL_CA3 = 4, COL_CA4 = 5;
+  const COL_HOURS_START = 6;
+  const COL_HOURS_END = COL_HOURS_START + numEmployees - 1;
+  const COL_NOTE = COL_HOURS_END + 1;
+  const COL_TOTAL_NAME = COL_NOTE + 1;
+  const COL_TOTAL_HOURS = COL_TOTAL_NAME + 1;
+  const COL_MONEY = COL_TOTAL_HOURS + 1;
+  const LAST_COL = COL_MONEY;
+
+  const R_ORG = 0, R_ADDR = 1, R_TITLE = 3, R_HEAD1 = 4, R_HEAD2 = 5;
+  const R_DATA_START = 6;
+  const R_DATA_END = R_DATA_START + allDates.length - 1;
+
+  const ws = {};
+
+  setCellStyle(ws, R_ORG, COL_NGAY, {}).v = 'Phân Hiệu Trường ĐH FPT tại Tỉnh Bình Định';
+  ws[XLSX.utils.encode_cell({ r: R_ORG, c: COL_NGAY })].s = { font: { bold: true, sz: 12 } };
+  setCellStyle(ws, R_ADDR, COL_NGAY, {}).v = 'Khu đô thị mới An Phú Thịnh, Phường Quy Nhơn Đông, Tỉnh Gia Lai, Việt Nam';
+
+  const titleCell = ensureCell(ws, R_TITLE, COL_NGAY);
+  titleCell.v = `BẢNG CHẤM CÔNG CTV-IT THÁNG ${String(month).padStart(2, '0')}/${year}`;
+  titleCell.s = { font: { bold: true, sz: 13 }, alignment: { horizontal: 'center', vertical: 'center' } };
+
+  // Header nhóm cột (dòng R_HEAD1 - R_HEAD2)
+  const headerLabel = (r, c, text) => { const cell = ensureCell(ws, r, c); cell.v = text; };
+  headerLabel(R_HEAD1, COL_NGAY, 'Ngày');
+  headerLabel(R_HEAD1, COL_THU, 'Thứ');
+  headerLabel(R_HEAD1, COL_CA1, 'Ca 1 (7:00-9:30)');
+  headerLabel(R_HEAD1, COL_CA2, 'Ca 2 (9:30-12:30)');
+  headerLabel(R_HEAD1, COL_CA3, 'Ca 3 (12:30-15:00)');
+  headerLabel(R_HEAD1, COL_CA4, 'Ca 4 (15:00-17:30)');
+  headerLabel(R_HEAD1, COL_HOURS_START, 'Số giờ làm được trong ngày(giờ)');
+  headerLabel(R_HEAD1, COL_NOTE, 'Ghi chú');
+  headerLabel(R_HEAD1, COL_TOTAL_NAME, 'Tổng giờ làm(giờ)');
+  headerLabel(R_HEAD1, COL_MONEY, 'Thành tiền (VNĐ)');
+
+  sortedEmployees.forEach((emp, idx) => {
+    headerLabel(R_HEAD2, COL_HOURS_START + idx, emp.ten_nhan_vien);
   });
-
-  const wsData = [
-    ['Phân Hiệu Trường ĐH FPT tại Tỉnh Bình Định'],
-    ['Khu đô thị mới An Phú Thịnh, Phường Quy Nhơn Đông, Tỉnh Gia Lai, Việt Nam'],
-    [],
-    [`BẢNG CHẤM CÔNG CTV-IT THÁNG ${String(month).padStart(2, '0')}/${year}`],
-    [],
-    [
-      'Ngày',
-      'Thứ',
-      'Ca 1 (7:00-9:30)',
-      'Ca 2 (9:30-12:30)',
-      'Ca 3 (12:30-15:00)',
-      'Ca 4 (15:00-17:30)',
-      ...sortedEmployees.map(e => `${getEmployeeAbbr(e)} (giờ)`),
-      'Ghi chú',
-      'Tổng giờ',
-      'Thành tiền (VNĐ)'
-    ]
-  ];
-
-  const dataStartRow = 5;
-  const dataEndRow = dataStartRow + allDates.length - 1;
-
-  allDates.forEach(d => {
-    const date = new Date(d);
-    const r = dataMap[d];
-
-    wsData.push([
-      `${date.getDate()}/${date.getMonth() + 1}/${year}`,
-      getWeekdayVN(d),
-      r.ca1_display,
-      r.ca2_display,
-      r.ca3_display,
-      r.ca4_display,
-      ...sortedEmployees.map(e => {
-        const hours = r.employee_hours[e.id] || 0;
-        return hours > 0 ? hours.toFixed(2) : '';
-      }),
-      r.ghi_chu || '',
-      r.total_hours > 0 ? r.total_hours.toFixed(2) : '',
-      r.total_hours > 0 ? (r.total_hours * 22000).toLocaleString('vi-VN') : ''
-    ]);
-  });
-
-  wsData.push([]);
-  
-  const employeeTotals = {};
-  sortedEmployees.forEach(e => {
-    let total = 0;
-    allDates.forEach(d => {
-      total += dataMap[d]?.employee_hours[e.id] || 0;
-    });
-    employeeTotals[e.id] = total;
-  });
-
-  sortedEmployees.forEach((e, i) => {
-    const total = employeeTotals[e.id];
-    if (total > 0) {
-      const rowData = [
-        '', '', '', '', '', '',
-        ...sortedEmployees.map((emp, idx) => idx === i ? total.toFixed(2) : ''),
-        `Tổng ${getEmployeeAbbr(e)}`,
-        total.toFixed(2),
-        (total * 22000).toLocaleString('vi-VN')
-      ];
-      while (rowData.length < 9 + sortedEmployees.length) {
-        rowData.push('');
-      }
-      wsData.push(rowData);
-    }
-  });
-
-  const grandTotal = Object.values(employeeTotals).reduce((sum, val) => sum + val, 0);
-  
-  wsData.push([]);
-  const grandTotalRow = [
-    '', '', '', '', '', '',
-    ...Array(sortedEmployees.length).fill(''),
-    'TỔNG CỘNG',
-    grandTotal.toFixed(2),
-    (grandTotal * 22000).toLocaleString('vi-VN')
-  ];
-  while (grandTotalRow.length < 9 + sortedEmployees.length) {
-    grandTotalRow.push('');
-  }
-  wsData.push(grandTotalRow);
-
-  wsData.push([]);
-  wsData.push(['', '', '', '', '', '', ...Array(sortedEmployees.length).fill(''), '',
-    'Chú ý: bạn làm tối đa 91h thôi, không được làm 2 ca liên tiếp'
-  ]);
-
-  wsData.push([]);
-  wsData.push(['', 'Cộng tác viên IT', '', '', '', '', 'Người lập biểu']);
-
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
 
   const merges = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 8 + sortedEmployees.length } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 8 + sortedEmployees.length } },
-    { s: { r: 3, c: 0 }, e: { r: 3, c: 8 + sortedEmployees.length } }
+    { s: { r: R_ORG, c: COL_NGAY }, e: { r: R_ORG, c: COL_NOTE } },
+    { s: { r: R_ADDR, c: COL_NGAY }, e: { r: R_ADDR, c: COL_NOTE } },
+    { s: { r: R_TITLE, c: COL_NGAY }, e: { r: R_TITLE, c: COL_NOTE } },
+    { s: { r: R_HEAD1, c: COL_NGAY }, e: { r: R_HEAD2, c: COL_NGAY } },
+    { s: { r: R_HEAD1, c: COL_THU }, e: { r: R_HEAD2, c: COL_THU } },
+    { s: { r: R_HEAD1, c: COL_CA1 }, e: { r: R_HEAD2, c: COL_CA1 } },
+    { s: { r: R_HEAD1, c: COL_CA2 }, e: { r: R_HEAD2, c: COL_CA2 } },
+    { s: { r: R_HEAD1, c: COL_CA3 }, e: { r: R_HEAD2, c: COL_CA3 } },
+    { s: { r: R_HEAD1, c: COL_CA4 }, e: { r: R_HEAD2, c: COL_CA4 } },
+    { s: { r: R_HEAD1, c: COL_HOURS_START }, e: { r: R_HEAD1, c: COL_HOURS_END } },
+    { s: { r: R_HEAD1, c: COL_NOTE }, e: { r: R_HEAD2, c: COL_NOTE } },
+    { s: { r: R_HEAD1, c: COL_TOTAL_NAME }, e: { r: R_HEAD1, c: COL_TOTAL_HOURS } },
   ];
-  ws['!merges'] = merges;
 
-  const colWidths = [
-    { wch: 12 }, { wch: 10 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 },
-    ...Array(sortedEmployees.length).fill({ wch: 8 }),
-    { wch: 20 }, { wch: 10 }, { wch: 15 }
-  ];
-  ws['!cols'] = colWidths;
+  // Style toàn bộ vùng header Ngày..Ghi chú (2 dòng)
+  for (let r = R_HEAD1; r <= R_HEAD2; r++) {
+    for (let c = COL_NGAY; c <= COL_NOTE; c++) setCellStyle(ws, r, c, HEADER_STYLE);
+  }
+  // Style header "Tổng giờ làm" / "Thành tiền" (chỉ dòng R_HEAD1, dòng R_HEAD2 để trống cho dữ liệu)
+  [COL_TOTAL_NAME, COL_TOTAL_HOURS, COL_MONEY].forEach(c => setCellStyle(ws, R_HEAD1, c, HEADER_STYLE));
 
-  allDates.forEach((d, i) => {
-    if (isSunday(d)) {
-      for (let c = 0; c < 9 + sortedEmployees.length; c++) {
-        const cell = ensureCell(ws, dataStartRow + i, c);
-        cell.s = {
-          fill: { fgColor: { rgb: 'FFFF00' } },
-          alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-          border: {
-            top: { style: 'thin' },
-            bottom: { style: 'thin' },
-            left: { style: 'thin' },
-            right: { style: 'thin' }
-          }
-        };
-      }
-    }
+  // Bảng tổng giờ làm / thành tiền từng nhân viên, bắt đầu từ dòng R_HEAD2
+  sortedEmployees.forEach((emp, idx) => {
+    const r = R_HEAD2 + idx;
+    const total = employeeTotals[emp.id] || 0;
+
+    const nameCell = ensureCell(ws, r, COL_TOTAL_NAME);
+    nameCell.v = emp.ten_nhan_vien;
+    nameCell.s = { font: { bold: true }, border: THIN_BORDER };
+
+    const hoursCell = ensureCell(ws, r, COL_TOTAL_HOURS);
+    hoursCell.v = Number(total.toFixed(2));
+    hoursCell.t = 'n';
+    hoursCell.s = { alignment: { horizontal: 'center' }, border: THIN_BORDER };
+
+    const hoursAddr = XLSX.utils.encode_cell({ r, c: COL_TOTAL_HOURS });
+    const moneyCell = ensureCell(ws, r, COL_MONEY);
+    moneyCell.t = 'n';
+    moneyCell.v = Number(total.toFixed(2)) * hourlyRate;
+    moneyCell.f = `${hoursAddr}*${hourlyRate}`;
+    moneyCell.z = '#,##0';
+    moneyCell.s = { alignment: { horizontal: 'center' }, border: THIN_BORDER };
   });
 
-  for (let c = 0; c < 9 + sortedEmployees.length; c++) {
-    const cell = ensureCell(ws, dataEndRow, c);
-    cell.s = {
-      ...(cell.s || {}),
-      border: {
-        ...(cell.s?.border || {}),
-        bottom: { style: 'thick', color: { rgb: '000000' } }
-      }
-    };
-  }
+  // Dữ liệu từng ngày trong tháng
+  allDates.forEach((d, i) => {
+    const r = R_DATA_START + i;
+    const date = new Date(d);
+    const row = dataMap[d];
+    const sunday = isSunday(d);
 
-  for (let c = 0; c < 9 + sortedEmployees.length; c++) {
-    const cell = ensureCell(ws, 4, c);
-    cell.s = {
-      font: { bold: true, color: { rgb: 'FFFFFF' } },
-      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-      fill: { fgColor: { rgb: '1976D2' } },
-      border: {
-        top: { style: 'thin' },
-        bottom: { style: 'thin' },
-        left: { style: 'thin' },
-        right: { style: 'thin' }
-      }
-    };
-  }
+    ensureCell(ws, r, COL_NGAY).v = `${date.getDate()}/${date.getMonth() + 1}/${year}`;
+    ensureCell(ws, r, COL_THU).v = getWeekdayVN(d);
+    ensureCell(ws, r, COL_CA1).v = row.ca1_names.join(', ');
+    ensureCell(ws, r, COL_CA2).v = row.ca2_names.join(', ');
+    ensureCell(ws, r, COL_CA3).v = row.ca3_names.join(', ');
+    ensureCell(ws, r, COL_CA4).v = row.ca4_names.join(', ');
 
-  for (let r = dataStartRow; r <= dataEndRow; r++) {
-    for (let c = 0; c < 9 + sortedEmployees.length; c++) {
+    sortedEmployees.forEach((emp, idx) => {
+      const hrs = row.employee_hours[emp.id] || 0;
+      const cell = ensureCell(ws, r, COL_HOURS_START + idx);
+      cell.v = Number(hrs.toFixed(2));
+      cell.t = 'n';
+    });
+
+    const subNotes = Object.values(row.substitutions).map((sub) => {
+      const performers = Array.from(sub.performers).join(', ');
+      return `${performers} trực thay cho ${sub.receiver} ca ${CA_NUMBER[sub.ca]}`;
+    });
+    ensureCell(ws, r, COL_NOTE).v = subNotes.join('; ');
+
+    for (let c = COL_NGAY; c <= LAST_COL; c++) {
       const cell = ensureCell(ws, r, c);
       cell.s = {
         ...(cell.s || {}),
-        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-        border: {
-          top: { style: 'thin' },
-          bottom: { style: 'thin' },
-          left: { style: 'thin' },
-          right: { style: 'thin' }
-        }
+        alignment: CENTER_WRAP,
+        border: THIN_BORDER,
+        ...(sunday ? { fill: { fgColor: { rgb: 'FFFF00' } } } : {})
       };
     }
+  });
+
+  // Viền đậm kết thúc bảng ngày
+  for (let c = COL_NGAY; c <= LAST_COL; c++) {
+    const cell = ensureCell(ws, R_DATA_END, c);
+    cell.s = {
+      ...(cell.s || {}),
+      border: { ...(cell.s?.border || {}), bottom: { style: 'thick', color: { rgb: '000000' } } }
+    };
   }
+
+  // Chân bảng: chữ ký (cách dòng cuối cùng của tháng 3 dòng trống, giống mẫu gốc)
+  const footerRow = R_DATA_END + 4;
+  const footerLeft = ensureCell(ws, footerRow, COL_THU);
+  footerLeft.v = 'Cộng tác viên IT';
+  footerLeft.s = { font: { bold: true }, alignment: { horizontal: 'center' } };
+
+  const footerRight = ensureCell(ws, footerRow, COL_HOURS_START);
+  footerRight.v = 'Người lập biểu';
+  footerRight.s = { font: { bold: true }, alignment: { horizontal: 'center' } };
+
+  merges.push(
+    { s: { r: footerRow, c: COL_THU }, e: { r: footerRow, c: COL_CA3 } },
+    { s: { r: footerRow, c: COL_HOURS_START }, e: { r: footerRow, c: COL_NOTE } }
+  );
+
+  const noteRow = footerRow + 2;
+  ensureCell(ws, noteRow, COL_NGAY).v = 'Chú ý: bạn làm tối đa 91h thôi, không được làm 2 ca liên tiếp';
+  ensureCell(ws, noteRow, COL_NGAY).s = { font: { italic: true, sz: 10 } };
+
+  ws['!merges'] = merges;
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: noteRow, c: LAST_COL } });
+
+  ws['!cols'] = [
+    { wch: 11 }, { wch: 11 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
+    ...Array(numEmployees).fill({ wch: 11 }),
+    { wch: 26 }, { wch: 13 }, { wch: 9 }, { wch: 16 }
+  ];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, `Tháng ${month}`);
-  
+
   const fileName = `Bảng chấm công CTV IT tháng ${month} năm ${year}.xlsx`;
   XLSX.writeFile(wb, fileName);
 };
@@ -665,14 +677,14 @@ const TrucThayRequestsCompact = ({
                   <Table size="small" stickyHeader>
                     <TableHead>
                       <TableRow>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>STT</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Người trực thay</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Người được trực thay</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Ngày</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Ca</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Lý do</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Trạng thái</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Thời gian tạo</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>STT</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Người trực thay</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Người được trực thay</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Ngày</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Ca</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Lý do</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Trạng thái</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Thời gian tạo</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -1063,17 +1075,17 @@ const TimeAdjustmentRequestsCompact = ({ requests, pendingCount, onProcessReques
                   <Table size="small" stickyHeader>
                     <TableHead>
                       <TableRow>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>STT</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Nhân viên</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Loại</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Ngày</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Ca</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Giờ đề xuất</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Giờ điều chỉnh</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Lý do</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Ghi chú admin</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Trạng thái</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f5f5f5', fontSize: '0.75rem' }}>Thời gian xử lý</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>STT</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Nhân viên</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Loại</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Ngày</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Ca</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Giờ đề xuất</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Giờ điều chỉnh</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Lý do</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Ghi chú admin</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Trạng thái</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Thời gian xử lý</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -1161,7 +1173,7 @@ const TimeAdjustmentRequestsCompact = ({ requests, pendingCount, onProcessReques
         <DialogContent>
           {selectedRequest && (
             <>
-              <Paper sx={{ p: 2, mb: 2, bgcolor: '#f5f5f5' }}>
+              <Paper sx={{ p: 2, mb: 2, bgcolor: 'action.hover' }}>
                 <Typography variant="body2" fontWeight="bold" gutterBottom>
                   Thông tin yêu cầu:
                 </Typography>
@@ -2276,22 +2288,25 @@ const loadEmployeesWithStats = async () => {
       groupedByDate[date].employeeHours[employee.id] = 
         (groupedByDate[date].employeeHours[employee.id] || 0) + hours;
       
-      // Xử lý thông tin trực thay
+      // Xử lý thông tin trực thay.
+      // LƯU Ý: backend đã quy đổi chủ sở hữu giờ công về NGƯỜI ĐĂNG KÝ GỐC, nên khi dữ liệu
+      // của chính nhân viên `employee` (vd: Thiện) có loai_lich === 'virtual', nghĩa là
+      // CA CỦA HỌ đã được người khác (record.ten_nguoi_truc_thay, vd: Biên) thực hiện thay,
+      // nhưng giờ công + tên hiển thị trong bảng vẫn thuộc về `employee`.
       let trucThayInfo = null;
       let isTrucThay = false;
       let tooltip = employeeAbbr;
-      
+
       if (record.loai_lich === 'virtual') {
-        // Người này đang trực thay cho người khác
         isTrucThay = true;
         trucThayInfo = {
-          type: 'performer',
-          nguoi_duoc_truc_thay: record.ten_nguoi_duoc_truc_thay,
-          ma_nguoi_duoc_truc_thay: record.ma_nguoi_duoc_truc_thay
+          type: 'was_substituted',
+          nguoi_thuc_hien: record.ten_nguoi_truc_thay,
+          ma_nguoi_thuc_hien: record.ma_nguoi_truc_thay
         };
-        tooltip = `${employeeAbbr} (trực thay cho ${record.ten_nguoi_duoc_truc_thay})`;
+        tooltip = `${employeeAbbr} trực thay bởi ${record.ten_nguoi_truc_thay}`;
       } else if (record.loai_lich === 'original') {
-        // Người này được trực thay bởi người khác
+        // Trường hợp hiếm gặp: dòng lịch gốc tự có giờ làm (không qua trực thay đầy đủ)
         isTrucThay = false;
         trucThayInfo = {
           type: 'receiver',
@@ -2300,7 +2315,7 @@ const loadEmployeesWithStats = async () => {
         };
         tooltip = `${employeeAbbr} (được ${record.ten_nguoi_truc_thay} trực thay)`;
       }
-      
+
       // Lưu chi tiết ca
       groupedByDate[date][`${ca}_details`].push({
         name: employeeAbbr,
@@ -2309,23 +2324,6 @@ const loadEmployeesWithStats = async () => {
         tooltip,
         trucThayInfo
       });
-      
-      // Ghi chú tổng hợp (giữ nguyên)
-      if (hours > 0) {
-        let note = `${employeeAbbr}: ${hours.toFixed(2)}h`;
-        if (trucThayInfo) {
-          if (trucThayInfo.type === 'performer') {
-            note += ` (trực thay ${trucThayInfo.nguoi_duoc_truc_thay})`;
-          } else {
-            note += ` (được ${trucThayInfo.nguoi_truc_thay} trực thay)`;
-          }
-        }
-        if (groupedByDate[date].ghi_chu) {
-          groupedByDate[date].ghi_chu += `; ${note}`;
-        } else {
-          groupedByDate[date].ghi_chu = note;
-        }
-      }
     });
     
     return Object.values(groupedByDate)
@@ -2628,6 +2626,29 @@ const handleTabChange = (event, newValue) => {
 
   const totals = calculateTotals();
 
+  // Bảng trực thay tháng hiện tại: ai đã trực thay cho ai, tổng bao nhiêu giờ - để 2 người tự
+  // thanh toán lại cho nhau (giờ này ĐÃ được cộng vào bảng công chính của người được trực thay).
+  const substitutionLedger = useMemo(() => {
+    const map = {};
+    Object.values(allAttendanceData).forEach((items) => {
+      (items || []).forEach((item) => {
+        ['ca1', 'ca2', 'ca3', 'ca4'].forEach((caKey) => {
+          (item[`${caKey}_details`] || []).forEach((detail) => {
+            if (detail?.trucThayInfo?.type === 'was_substituted') {
+              const receiver = detail.name;
+              const performer = abbrOfName(detail.trucThayInfo.nguoi_thuc_hien);
+              const key = `${performer}→${receiver}`;
+              if (!map[key]) map[key] = { performer, receiver, hours: 0, count: 0 };
+              map[key].hours += Number(detail.hours) || 0;
+              map[key].count += 1;
+            }
+          });
+        });
+      });
+    });
+    return Object.values(map).sort((a, b) => b.hours - a.hours);
+  }, [allAttendanceData]);
+
   // Handle Excel export
   const handleExportExcel = () => {
     exportChamCongExcel(allAttendanceData, employees, selectedEmployees, year, month);
@@ -2649,7 +2670,7 @@ const handleTabChange = (event, newValue) => {
   }
 
   return (
-    <Box sx={{ p: 2.5, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+    <Box sx={{ p: 2.5, bgcolor: 'background.default', minHeight: '100vh' }}>
       {/* Header */}
       <Typography variant="h5" fontWeight="bold" sx={{ mb: 2.5, color: '#1976d2' }}>
         QUẢN LÝ CHẤM CÔNG
@@ -2657,8 +2678,8 @@ const handleTabChange = (event, newValue) => {
 
       {/* Tabs */}
       <Paper sx={{ mb: 2.5, borderRadius: 2, overflow: 'hidden' }}>
-        <Tabs 
-          value={tabValue} 
+        <Tabs
+          value={tabValue}
           onChange={handleTabChange}
           variant="fullWidth"
           indicatorColor="primary"
@@ -2815,6 +2836,66 @@ const handleTabChange = (event, newValue) => {
             </Paper>
           </Grid>
         </Grid>
+
+        {/* BẢNG TRỰC THAY THÁNG - để 2 người tự thanh toán lại giờ công cho nhau */}
+        {substitutionLedger.length > 0 && (
+          <Paper
+            sx={{
+              mt: 2,
+              p: 2,
+              borderRadius: 2,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
+              border: '1px solid #ffe0b2'
+            }}
+          >
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+              <SwapHorizIcon color="warning" fontSize="small" />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ fontSize: '1rem' }}>
+                🔄 Bảng trực thay tháng {month}/{year}
+              </Typography>
+              <Chip
+                size="small"
+                label={`${substitutionLedger.length} cặp trực thay`}
+                color="warning"
+                variant="outlined"
+              />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              Giờ trực thay đã được cộng vào bảng công của người được trực thay ở trên. Danh sách dưới đây
+              chỉ để 2 người tự đối chiếu và thanh toán lại giờ công cho nhau.
+            </Typography>
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 'bold', fontSize: '0.8rem' }}>Người trực thay</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold', fontSize: '0.8rem' }}>Trực thay cho</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 'bold', fontSize: '0.8rem' }}>Số ca</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 'bold', fontSize: '0.8rem' }}>Tổng giờ</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: '0.8rem' }}>Ước tính tiền (22.000đ/h)</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {substitutionLedger.map((row) => (
+                    <TableRow key={`${row.performer}-${row.receiver}`}>
+                      <TableCell sx={{ fontSize: '0.85rem' }}>
+                        <Chip size="small" label={row.performer} sx={{ bgcolor: '#fff3e0', fontWeight: 'bold' }} />
+                      </TableCell>
+                      <TableCell sx={{ fontSize: '0.85rem' }}>
+                        <Chip size="small" label={row.receiver} sx={{ bgcolor: '#e8f5e8', fontWeight: 'bold' }} />
+                      </TableCell>
+                      <TableCell align="center" sx={{ fontSize: '0.85rem' }}>{row.count}</TableCell>
+                      <TableCell align="center" sx={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{row.hours.toFixed(2)}h</TableCell>
+                      <TableCell align="right" sx={{ fontSize: '0.85rem' }}>
+                        {(row.hours * 22000).toLocaleString('vi-VN')}đ
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+        )}
       </TabPanel>
 
       {/* ================= TAB 2 ================= */}

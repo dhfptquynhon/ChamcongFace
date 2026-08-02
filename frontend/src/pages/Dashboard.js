@@ -3,10 +3,24 @@ import { useNavigate } from 'react-router-dom';
 import AuthContext from '../context/AuthContext';
 import AdminHistory from './AdminHistory';
 import { Box, Typography, Paper, Grid, Tabs, Tab, Button } from '@mui/material';
+import { ThemeProvider } from '@mui/material/styles';
 import ScheduleBoard from '../components/ScheduleBoard';
 import Attendance from './Attendance';
 import AnalogClock from './AnalogClock';
 import FaceRegistrationPrompt from '../components/FaceRegistrationPrompt';
+
+// Bảng lịch trực dùng nền màu pastel cố định (xanh lá/vàng/xanh dương) để thể hiện
+// trạng thái đăng ký ca, nên luôn khoá về giao diện sáng để chữ không bị khó đọc
+// khi người dùng bật giao diện tối toàn app.
+const lockLightTheme = (outerTheme) => ({
+  ...outerTheme,
+  palette: {
+    ...outerTheme.palette,
+    mode: 'light',
+    background: { default: '#ffffff', paper: '#ffffff' },
+    text: { primary: '#1e293b', secondary: '#475569' },
+  },
+});
 
 const Dashboard = () => {
   const { auth, setAuth } = useContext(AuthContext);
@@ -39,7 +53,17 @@ const Dashboard = () => {
   };
 
   return (
-    <Box sx={{ p: 1.5 }}>
+    <Box
+      sx={{
+        p: 1.5,
+        minHeight: '100vh',
+        backgroundImage: 'linear-gradient(rgba(15, 23, 42, 0.55), rgba(15, 23, 42, 0.4)), url(/images/hinhnen.jpg)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundAttachment: 'fixed',
+        backgroundRepeat: 'no-repeat',
+      }}
+    >
       {/* Prompt đăng ký khuôn mặt - chỉ hiện nếu chưa đăng ký và chưa đóng */}
       {showPrompt && auth && !auth.employee?.face_registered && (
         <FaceRegistrationPrompt 
@@ -50,48 +74,58 @@ const Dashboard = () => {
       )}
 
       {/* ===== TABS ===== */}
-      <Tabs
-        value={tab}
-        onChange={(_, v) => setTab(v)}
+      <Paper
+        elevation={0}
         sx={{
           mb: 1,
-          minHeight: 32,
-          '& .MuiTabs-indicator': {
-            height: 2,
-          },
+          display: 'inline-block',
+          bgcolor: 'rgba(255,255,255,0.9)',
+          backdropFilter: 'blur(6px)',
+          borderRadius: 1.5,
         }}
       >
-        <Tab
-          label="Hôm nay"
+        <Tabs
+          value={tab}
+          onChange={(_, v) => setTab(v)}
           sx={{
             minHeight: 32,
-            padding: '6px 10px',
-            fontSize: 13,
-            fontWeight: 500,
-            textTransform: 'none',
+            '& .MuiTabs-indicator': {
+              height: 2,
+            },
           }}
-        />
-        <Tab
-          label="Đăng ký trực trước"
-          sx={{
-            minHeight: 32,
-            padding: '6px 10px',
-            fontSize: 13,
-            fontWeight: 500,
-            textTransform: 'none',
-          }}
-        />
-        <Tab
-          label="Thông tin cá nhân"
-          sx={{
-            minHeight: 32,
-            padding: '6px 10px',
-            fontSize: 13,
-            fontWeight: 500,
-            textTransform: 'none',
-          }}
-        />
-      </Tabs>
+        >
+          <Tab
+            label="Hôm nay"
+            sx={{
+              minHeight: 32,
+              padding: '6px 10px',
+              fontSize: 13,
+              fontWeight: 500,
+              textTransform: 'none',
+            }}
+          />
+          <Tab
+            label="Đăng ký trực trước"
+            sx={{
+              minHeight: 32,
+              padding: '6px 10px',
+              fontSize: 13,
+              fontWeight: 500,
+              textTransform: 'none',
+            }}
+          />
+          <Tab
+            label="Thông tin cá nhân"
+            sx={{
+              minHeight: 32,
+              padding: '6px 10px',
+              fontSize: 13,
+              fontWeight: 500,
+              textTransform: 'none',
+            }}
+          />
+        </Tabs>
+      </Paper>
 
       {/* ===== TAB 0: HÔM NAY (CHECKIN/CHECKOUT NHANH) ===== */}
       {tab === 0 && (
@@ -103,7 +137,9 @@ const Dashboard = () => {
       {/* ===== TAB 1: LỊCH TRỰC THÁNG ===== */}
       {tab === 1 && (
         <Box sx={{ mt: 0.5 }}>
-          <ScheduleBoard refreshToken={refreshKey} />
+          <ThemeProvider theme={lockLightTheme}>
+            <ScheduleBoard refreshToken={refreshKey} />
+          </ThemeProvider>
         </Box>
       )}
 

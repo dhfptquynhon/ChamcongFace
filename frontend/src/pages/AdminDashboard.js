@@ -551,11 +551,24 @@ const AdminDashboard = () => {
   };
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: { xs: 1.5, sm: 3 }, maxWidth: 1500, mx: 'auto' }}>
       {/* TIÊU ĐỀ */}
-      <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#1976d2', mb: 3 }}>
-        🛠️ Bảng điều khiển Quản trị viên
-      </Typography>
+      <Box
+        sx={{
+          mb: 3,
+          p: { xs: 2, sm: 2.5 },
+          borderRadius: 3,
+          background: 'linear-gradient(120deg, #4f46e5 0%, #6366f1 45%, #0ea5e9 100%)',
+          color: '#fff',
+        }}
+      >
+        <Typography variant="h5" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          🛠️ Bảng điều khiển Quản trị viên
+        </Typography>
+        <Typography sx={{ fontSize: 13, opacity: 0.9, mt: 0.5 }}>
+          Quản lý nhân viên, ca trực và báo cáo chấm công
+        </Typography>
+      </Box>
 
       {/* THỐNG KÊ TỔNG QUAN */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
@@ -648,16 +661,23 @@ const AdminDashboard = () => {
       )}
 
       {/* TABS */}
-      <Paper sx={{ mb: 3, borderRadius: 2 }}>
-        <Tabs 
-          value={tab} 
+      <Paper sx={{ mb: 3, borderRadius: 3, p: 0.5 }}>
+        <Tabs
+          value={tab}
           onChange={(e, v) => setTab(v)}
           variant="fullWidth"
           sx={{
+            '& .MuiTabs-indicator': { display: 'none' },
             '& .MuiTab-root': {
-              minHeight: 48,
-              fontWeight: 500
-            }
+              minHeight: 44,
+              fontWeight: 600,
+              borderRadius: 2.5,
+              color: 'text.secondary',
+            },
+            '& .Mui-selected': {
+              color: '#fff !important',
+              background: 'linear-gradient(120deg, #4f46e5, #6366f1)',
+            },
           }}
         >
           <Tab 
@@ -1267,7 +1287,7 @@ const AdminDashboard = () => {
             📋 Xuất báo cáo tổng hợp
           </Typography>
           
-          <Card sx={{ p: 2, mb: 3, backgroundColor: '#f5f5f5' }}>
+          <Card sx={{ p: 2, mb: 3, backgroundColor: 'action.hover' }}>
             <Typography variant="subtitle2" gutterBottom>
               ⚙️ Thiết lập thời gian báo cáo
             </Typography>
@@ -1320,19 +1340,18 @@ const AdminDashboard = () => {
                   <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
                     <DownloadIcon color="primary" sx={{ mr: 1 }} />
                     <Typography variant="h6" color="primary">
-                      Báo cáo chấm công chi tiết
+                      Bảng chấm công CTV-IT (mẫu chuẩn)
                     </Typography>
                   </Box>
                   <Typography variant="body2" paragraph>
-                    Xuất báo cáo Excel chi tiết tất cả nhân viên theo tháng:
+                    Xuất đúng theo mẫu "Bảng chấm công CTV IT" của trường: mỗi ngày một dòng,
+                    người trực từng ca 1-4, số giờ làm và thành tiền của từng nhân viên trong tháng.
                   </Typography>
                   <ul style={{ marginLeft: '20px', paddingLeft: 0 }}>
-                    <li>Thông tin chi tiết từng nhân viên</li>
-                    <li>Số ca đã đăng ký và hoàn thành</li>
-                    <li>Giờ check-in/check-out từng ca</li>
-                    <li>Tổng giờ làm việc</li>
-                    <li>Trạng thái chấm công</li>
-                    <li>Ngày làm việc trong tháng</li>
+                    <li>Danh sách người trực từng ca theo ngày</li>
+                    <li>Số giờ làm được trong ngày của mỗi nhân viên</li>
+                    <li>Chủ nhật được tô vàng, ghi chú đổi ca</li>
+                    <li>Tổng giờ làm và thành tiền (đơn giá 22.000đ/giờ) cuối bảng</li>
                   </ul>
                   <Button
                     fullWidth
@@ -1341,7 +1360,7 @@ const AdminDashboard = () => {
                     onClick={exportAttendanceReport}
                     sx={{ mt: 2 }}
                   >
-                    Xuất báo cáo chấm công
+                    Xuất bảng chấm công
                   </Button>
                 </CardContent>
               </Card>
