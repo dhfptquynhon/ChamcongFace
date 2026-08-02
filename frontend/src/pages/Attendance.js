@@ -281,7 +281,13 @@ const Attendance = ({ onChanged }) => {
           <Typography variant="h5" fontWeight={600}>
             Ca hôm nay của bạn:
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              fontWeight: 600,
+              color: (theme) => (theme.palette.mode === 'dark' ? '#66bb6a' : '#2e7d32')
+            }}
+          >
             Ngày: {formattedToday}
           </Typography>
         </Box>

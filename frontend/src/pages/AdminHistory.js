@@ -1851,7 +1851,13 @@ const EmployeeList = ({
         />
       </Box>
       
-      <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0', bgcolor: '#fafafa' }}>
+      <Box
+        sx={{
+          p: 1.5,
+          borderBottom: (theme) => `1px solid ${theme.palette.divider}`,
+          bgcolor: (theme) => (theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : '#fafafa')
+        }}
+      >
         <FormControlLabel
           control={
             <Checkbox
@@ -1863,7 +1869,7 @@ const EmployeeList = ({
             />
           }
           label={
-            <Typography variant="body2" fontWeight="medium" sx={{ fontSize: '0.85rem' }}>
+            <Typography variant="body2" fontWeight="medium" sx={{ fontSize: '0.85rem', color: 'text.primary' }}>
               Chọn tất cả
             </Typography>
           }
@@ -3041,10 +3047,10 @@ const handleTabChange = (event, newValue) => {
                   {substitutionLedger.map((row) => (
                     <TableRow key={`${row.performer}-${row.receiver}`}>
                       <TableCell sx={{ fontSize: '0.85rem' }}>
-                        <Chip size="small" label={row.performer} sx={{ bgcolor: '#fff3e0', fontWeight: 'bold' }} />
+                        <Chip size="small" label={row.performer} sx={{ bgcolor: '#fff3e0', color: '#7c4a03', fontWeight: 'bold' }} />
                       </TableCell>
                       <TableCell sx={{ fontSize: '0.85rem' }}>
-                        <Chip size="small" label={row.receiver} sx={{ bgcolor: '#e8f5e8', fontWeight: 'bold' }} />
+                        <Chip size="small" label={row.receiver} sx={{ bgcolor: '#e8f5e8', color: '#1b5e20', fontWeight: 'bold' }} />
                       </TableCell>
                       <TableCell align="center" sx={{ fontSize: '0.85rem' }}>{row.count}</TableCell>
                       <TableCell align="center" sx={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{row.hours.toFixed(2)}h</TableCell>
