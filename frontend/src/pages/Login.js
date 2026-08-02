@@ -63,14 +63,31 @@ const Login = () => {
       flexDirection: isMobile ? "column" : "row",
       justifyContent: "center",
       alignItems: "center",
-      background: "linear-gradient(135deg,#2b2b2b,#1c1c1c)",
+      background: "#1c1c1c",
       gap: isMobile ? "30px" : "80px",
       position: "relative",
       overflow: "hidden",
       padding: isMobile ? "20px" : "0"
     },
+    bgLayer: (image, visible) => ({
+      position: "absolute",
+      inset: 0,
+      backgroundImage: `url(${image})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      opacity: visible ? 1 : 0,
+      transition: "opacity 0.8s ease",
+      zIndex: 0
+    }),
+    bgOverlay: {
+      position: "absolute",
+      inset: 0,
+      background: "linear-gradient(135deg, rgba(15,15,15,0.55), rgba(15,15,15,0.65))",
+      zIndex: 1
+    },
     lamp: {
       position: "relative",
+      zIndex: 2,
       cursor: "pointer",
       transition: "transform 0.3s ease",
       transform: isMobile ? "scale(0.8)" : "scale(1)"
@@ -119,6 +136,8 @@ const Login = () => {
       display: "flex",
       flexDirection: "column",
       gap: "15px",
+      position: "relative",
+      zIndex: 2,
       opacity: showLogin ? 1 : 0,
       transform: showLogin ? "translateX(0)" : (isMobile ? "translateY(20px)" : "translateX(20px)"),
       transition: "opacity 0.5s ease, transform 0.5s ease",
@@ -184,6 +203,7 @@ const Login = () => {
       top: isMobile ? "10px" : "30px", // đưa lên trên
       left: "50%",
       transform: "translateX(-50%)",
+      zIndex: 2,
       color: "#aaa",
       fontSize: isMobile ? "12px" : "14px",
       background: "rgba(0,0,0,0.5)",
@@ -207,6 +227,11 @@ const Login = () => {
 
   return (
     <div style={styles.container}>
+      {/* Hình nền: tối khi tắt đèn, sáng khi bật đèn - chuyển mượt bằng fade */}
+      <div style={styles.bgLayer('/images/imagetoi.jpg', !lampOn)} />
+      <div style={styles.bgLayer('/images/imagesang.jpg', lampOn)} />
+      <div style={styles.bgOverlay} />
+
       {/* Hình cái đèn bên trái (hoặc trên nếu mobile) */}
       <div
         style={styles.lamp}
