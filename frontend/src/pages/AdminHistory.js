@@ -171,6 +171,155 @@ const HEADER_STYLE = {
   border: THIN_BORDER
 };
 
+const CA_LABEL = { ca1: 'Ca 1', ca2: 'Ca 2', ca3: 'Ca 3', ca4: 'Ca 4' };
+
+// Xây sheet "Bảng trực thay": tổng hợp theo cặp (người trực thay -> người được trực thay)
+// và chi tiết từng ca trực thay trong tháng, để 2 người đối chiếu và thanh toán lại giờ công.
+const buildTrucThaySheet = (substitutionEvents, month, year, hourlyRate = 22000) => {
+  const ws = {};
+  const LAST_COL = 6; // 0..6 = 7 cột (đủ cho cả 2 bảng bên dưới)
+
+  let r = 0;
+  const titleCell = ensureCell(ws, r, 0);
+  titleCell.v = `BẢNG TRỰC THAY THÁNG ${String(month).padStart(2, '0')}/${year}`;
+  titleCell.s = { font: { bold: true, sz: 13 }, alignment: { horizontal: 'center', vertical: 'center' } };
+  const merges = [{ s: { r, c: 0 }, e: { r, c: LAST_COL } }];
+  r += 1;
+
+  const subtitleCell = ensureCell(ws, r, 0);
+  subtitleCell.v = `Giờ trực thay đã được cộng vào bảng công của người được trực thay ở sheet "Tháng ${month}". Bảng dưới đây chỉ để 2 người đối chiếu và tự thanh toán lại giờ công cho nhau.`;
+  subtitleCell.s = { font: { italic: true, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center', wrapText: true } };
+  merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+  r += 2;
+
+  if (!substitutionEvents.length) {
+    const emptyCell = ensureCell(ws, r, 0);
+    emptyCell.v = `Không có ca trực thay nào trong tháng ${month}/${year}.`;
+    emptyCell.s = { font: { italic: true } };
+    ws['!merges'] = merges;
+    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r, c: LAST_COL } });
+    ws['!cols'] = Array(LAST_COL + 1).fill({ wch: 16 });
+    return ws;
+  }
+
+  // ---- 1. Tổng hợp theo cặp trực thay ----
+  const summaryMap = {};
+  substitutionEvents.forEach((ev) => {
+    const key = `${ev.performerFull}→${ev.receiverFull}`;
+    if (!summaryMap[key]) {
+      summaryMap[key] = { performer: ev.performerFull, receiver: ev.receiverFull, count: 0, hours: 0 };
+    }
+    summaryMap[key].count += 1;
+    summaryMap[key].hours += ev.hours || 0;
+  });
+  const summaryRows = Object.values(summaryMap).sort((a, b) => b.hours - a.hours);
+
+  const sectionCell1 = ensureCell(ws, r, 0);
+  sectionCell1.v = '1. TỔNG HỢP THEO CẶP TRỰC THAY (để thanh toán tiền)';
+  sectionCell1.s = { font: { bold: true, sz: 11 } };
+  merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+  r += 1;
+
+  const SUMMARY_HEADERS = ['STT', 'Người trực thay', 'Trực thay cho', 'Số ca', 'Tổng giờ', 'Đơn giá (đ/giờ)', 'Thành tiền (VNĐ)'];
+  SUMMARY_HEADERS.forEach((text, c) => {
+    const cell = ensureCell(ws, r, c);
+    cell.v = text;
+    cell.s = HEADER_STYLE;
+  });
+  const summaryHeaderRow = r;
+  r += 1;
+
+  let totalCount = 0;
+  let totalHours = 0;
+  summaryRows.forEach((row, idx) => {
+    const money = Number(row.hours.toFixed(2)) * hourlyRate;
+    totalCount += row.count;
+    totalHours += row.hours;
+
+    const cells = [idx + 1, row.performer, row.receiver, row.count, Number(row.hours.toFixed(2)), hourlyRate, money];
+    cells.forEach((val, c) => {
+      const cell = ensureCell(ws, r, c);
+      cell.v = val;
+      if (typeof val === 'number') cell.t = 'n';
+      if (c === 6) cell.z = '#,##0';
+      cell.s = { alignment: c <= 2 ? { horizontal: c === 0 ? 'center' : 'left', vertical: 'center' } : CENTER_WRAP, border: THIN_BORDER };
+    });
+    r += 1;
+  });
+
+  const totalMoney = Number(totalHours.toFixed(2)) * hourlyRate;
+  const totalLabelCell = ensureCell(ws, r, 0);
+  totalLabelCell.v = 'Tổng cộng';
+  totalLabelCell.s = { font: { bold: true }, border: THIN_BORDER };
+  merges.push({ s: { r, c: 0 }, e: { r, c: 2 } });
+  [1, 2].forEach(c => setCellStyle(ws, r, c, { border: THIN_BORDER }));
+  const totalCountCell = ensureCell(ws, r, 3);
+  totalCountCell.v = totalCount; totalCountCell.t = 'n';
+  totalCountCell.s = { font: { bold: true }, alignment: CENTER_WRAP, border: THIN_BORDER };
+  const totalHoursCell = ensureCell(ws, r, 4);
+  totalHoursCell.v = Number(totalHours.toFixed(2)); totalHoursCell.t = 'n';
+  totalHoursCell.s = { font: { bold: true }, alignment: CENTER_WRAP, border: THIN_BORDER };
+  setCellStyle(ws, r, 5, { border: THIN_BORDER });
+  const totalMoneyCell = ensureCell(ws, r, 6);
+  totalMoneyCell.v = totalMoney; totalMoneyCell.t = 'n'; totalMoneyCell.z = '#,##0';
+  totalMoneyCell.s = { font: { bold: true }, alignment: CENTER_WRAP, border: THIN_BORDER, fill: { fgColor: { rgb: 'FFF3E0' } } };
+  r += 3;
+
+  // ---- 2. Chi tiết từng ca trực thay ----
+  const sectionCell2 = ensureCell(ws, r, 0);
+  sectionCell2.v = '2. CHI TIẾT TỪNG CA TRỰC THAY';
+  sectionCell2.s = { font: { bold: true, sz: 11 } };
+  merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+  r += 1;
+
+  const DETAIL_HEADERS = ['STT', 'Ngày', 'Thứ', 'Ca', 'Người trực thay', 'Trực thay cho', 'Số giờ', 'Thành tiền (VNĐ)'];
+  DETAIL_HEADERS.forEach((text, c) => {
+    const cell = ensureCell(ws, r, c);
+    cell.v = text;
+    cell.s = HEADER_STYLE;
+  });
+  r += 1;
+
+  const sortedEvents = [...substitutionEvents].sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.ca < b.ca ? -1 : 1;
+  });
+
+  sortedEvents.forEach((ev, idx) => {
+    const [y, m, d] = ev.date.split('-').map(Number);
+    const money = Number((ev.hours || 0).toFixed(2)) * hourlyRate;
+    const cells = [
+      idx + 1,
+      `${d}/${m}/${y}`,
+      getWeekdayVN(ev.date),
+      CA_LABEL[ev.ca] || ev.ca,
+      ev.performerFull,
+      ev.receiverFull,
+      Number((ev.hours || 0).toFixed(2)),
+      money
+    ];
+    cells.forEach((val, c) => {
+      const cell = ensureCell(ws, r, c);
+      cell.v = val;
+      if (typeof val === 'number') cell.t = 'n';
+      if (c === 7) cell.z = '#,##0';
+      cell.s = { alignment: c <= 3 ? CENTER_WRAP : (c >= 4 && c <= 5 ? { horizontal: 'left', vertical: 'center' } : CENTER_WRAP), border: THIN_BORDER };
+    });
+    r += 1;
+  });
+
+  ws['!merges'] = merges;
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: LAST_COL } });
+  ws['!cols'] = [
+    { wch: 6 }, { wch: 12 }, { wch: 11 }, { wch: 8 },
+    { wch: 20 }, { wch: 20 }, { wch: 10 }, { wch: 16 }
+  ];
+  ws['!rows'] = [];
+  ws['!rows'][summaryHeaderRow] = { hpt: 20 };
+
+  return ws;
+};
+
 // Xuất bảng chấm công CTV-IT đúng mẫu gốc: 2 dòng tiêu đề nhóm cột,
 // mỗi ngày 1 dòng, và bảng tổng giờ làm/thành tiền riêng theo từng nhân viên.
 const exportChamCongExcel = (
@@ -207,6 +356,8 @@ const exportChamCongExcel = (
   const employeeTotals = {};
   sortedEmployees.forEach(emp => { employeeTotals[emp.id] = 0; });
 
+  const substitutionEvents = [];
+
   sortedEmployees.forEach(emp => {
     const empAbbr = getEmployeeAbbr(emp);
     (attendanceData[emp.id] || []).forEach(item => {
@@ -235,6 +386,14 @@ const exportChamCongExcel = (
               row.substitutions[key] = { ca: caKey, receiver: receiverAbbr, performers: new Set() };
             }
             row.substitutions[key].performers.add(performerAbbr);
+
+            substitutionEvents.push({
+              date: item.date,
+              ca: caKey,
+              receiverFull: emp.ten_nhan_vien,
+              performerFull: detail.trucThayInfo.nguoi_thuc_hien || performerAbbr,
+              hours: detail.hours || 0
+            });
           }
         });
       });
@@ -404,6 +563,9 @@ const exportChamCongExcel = (
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, `Tháng ${month}`);
+
+  const wsTrucThay = buildTrucThaySheet(substitutionEvents, month, year, hourlyRate);
+  XLSX.utils.book_append_sheet(wb, wsTrucThay, 'Bảng trực thay');
 
   const fileName = `Bảng chấm công CTV IT tháng ${month} năm ${year}.xlsx`;
   XLSX.writeFile(wb, fileName);
