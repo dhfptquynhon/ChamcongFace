@@ -1924,6 +1924,13 @@ router.post('/truc-thay/request', auth, async (req, res) => {
       errors.push('Ca này đã được trực thay');
     }
 
+    // Người đã đạt giới hạn 91h/tháng không được đăng ký trực thay cho người khác
+    const requesterCapDate = new Date(originalSchedule.ngay);
+    const requesterCapHours = await getMonthlyHours(ma_nhan_vien, requesterCapDate.getMonth() + 1, requesterCapDate.getFullYear());
+    if (requesterCapHours >= 91) {
+      errors.push('Bạn đã đạt giới hạn tối đa 91 giờ trong tháng, không thể đăng ký trực thay cho người khác');
+    }
+
     if (errors.length > 0) {
       return res.status(400).json({ 
         success: false,
@@ -2566,6 +2573,17 @@ router.post('/truc-thay/checkin/:lich_truc_ao_id', auth, async (req, res) => {
       });
     }
 
+    // 2a. KIỂM TRA GIỚI HẠN 91H/THÁNG CỦA CHÍNH NGƯỜI TRỰC THAY (không tính giờ này,
+    // vì giờ trực thay tính cho người được trực thay, đây là giới hạn sức làm việc thực tế)
+    const capDateTT = new Date(virtualSchedule.ngay);
+    const capHoursTT = await getMonthlyHours(ma_nhan_vien, capDateTT.getMonth() + 1, capDateTT.getFullYear());
+    if (capHoursTT >= 91) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bạn đã đạt giới hạn tối đa 91 giờ trong tháng, không thể check-in.'
+      });
+    }
+
     // 2b. KIỂM TRA CHƯA TỚI GIỜ LÀM (giống ca thường - trước đây thiếu nên check-in sớm được)
     const shiftInfo = SHIFTS.find(s => s.key === virtualSchedule.ca);
     if (shiftInfo) {
@@ -2666,9 +2684,19 @@ router.post('/truc-thay/checkout/:lich_truc_ao_id', auth, async (req, res) => {
 
     // 2. Kiểm tra trạng thái
     if (virtualSchedule.trang_thai !== 'checked_in') {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Bạn cần check-in trước khi check-out' 
+        message: 'Bạn cần check-in trước khi check-out'
+      });
+    }
+
+    // 2a. KIỂM TRA GIỚI HẠN 91H/THÁNG CỦA CHÍNH NGƯỜI TRỰC THAY
+    const capDateTTOut = new Date(virtualSchedule.ngay);
+    const capHoursTTOut = await getMonthlyHours(ma_nhan_vien, capDateTTOut.getMonth() + 1, capDateTTOut.getFullYear());
+    if (capHoursTTOut >= 91) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bạn đã đạt giới hạn tối đa 91 giờ trong tháng, không thể check-out.'
       });
     }
 
@@ -3772,14 +3800,11 @@ if (date === today && currentTime > shiftEnd) {
       }
     }
 
-    // Chặn đăng ký nếu tổng giờ làm trong tháng đã đạt 91h
+    // Không chặn đăng ký ca dù đã đạt 91h: cho phép đăng ký để người khác (chưa đạt 91h)
+    // có thể đăng ký trực thay cho ca này. Việc chặn làm việc thực tế nằm ở bước check-in/check-out.
     const todayDate = new Date(date);
     const currentMonth = todayDate.getMonth() + 1;
     const currentYear = todayDate.getFullYear();
-    const totalMonthHours = await getMonthlyHours(ma_nhan_vien, currentMonth, currentYear);
-    if (totalMonthHours >= 91) {
-      return res.status(400).json({ message: 'Bạn đã đạt tối đa 91 giờ trong tháng, không thể đăng ký thêm' });
-    }
 
     // Thực hiện đăng ký
     const [result] = await db.query(
@@ -3846,7 +3871,14 @@ router.post('/schedule/:id/checkin', auth, async (req, res) => {
     if (record.trang_thai === 'checked_in') {
       return res.status(400).json({ message: 'Bạn đã check-in rồi' });
     }
-    
+
+    // KIỂM TRA GIỚI HẠN 91H/THÁNG: đã đạt tối đa thì không được check-in nữa
+    const capDate = new Date(record.ngay);
+    const capHours = await getMonthlyHours(ma_nhan_vien, capDate.getMonth() + 1, capDate.getFullYear());
+    if (capHours >= 91) {
+      return res.status(400).json({ message: 'Bạn đã đạt giới hạn tối đa 91 giờ trong tháng, không thể check-in.' });
+    }
+
     // Lấy thông tin ca
     const shiftInfo = {
       'ca1': { start: '07:00', end: '09:30' },
@@ -3854,10 +3886,10 @@ router.post('/schedule/:id/checkin', auth, async (req, res) => {
       'ca3': { start: '12:30', end: '15:00' },
       'ca4': { start: '15:00', end: '17:30' }
     };
-    
+
     const { start: shiftStart, end: shiftEnd } = shiftInfo[record.ca] || { start: '00:00', end: '23:59' };
     const recordDate = new Date(record.ngay).toISOString().split('T')[0];
-    
+
     // KIỂM TRA MỚI: CHƯA TỚI GIỜ LÀM
     // Nếu là ngày hôm nay và chưa tới giờ bắt đầu ca
     if (recordDate === currentDate && currentTime < shiftStart) {
@@ -3964,7 +3996,14 @@ router.post('/schedule/:id/checkout', auth, async (req, res) => {
     if (record.trang_thai !== 'checked_in') {
       return res.status(400).json({ message: 'Bạn cần check-in trước khi check-out' });
     }
-    
+
+    // KIỂM TRA GIỚI HẠN 91H/THÁNG: đã đạt tối đa thì không được check-out nữa
+    const capDateOut = new Date(record.ngay);
+    const capHoursOut = await getMonthlyHours(ma_nhan_vien, capDateOut.getMonth() + 1, capDateOut.getFullYear());
+    if (capHoursOut >= 91) {
+      return res.status(400).json({ message: 'Bạn đã đạt giới hạn tối đa 91 giờ trong tháng, không thể check-out.' });
+    }
+
     // Lấy thông tin ca
     const shiftInfo = {
       'ca1': { start: '07:00', end: '09:30' },
@@ -3972,9 +4011,9 @@ router.post('/schedule/:id/checkout', auth, async (req, res) => {
       'ca3': { start: '12:30', end: '15:00' },
       'ca4': { start: '15:00', end: '17:30' }
     };
-    
+
     const { start: shiftStart, end: shiftEnd } = shiftInfo[record.ca] || { start: '00:00', end: '23:59' };
-    
+
     // Xử lý ngày an toàn
     let recordDate;
     try {
