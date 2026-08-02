@@ -145,7 +145,7 @@ const FaceRegisterModal = ({ onClose, onSuccess }) => {
       const token = authData ? JSON.parse(authData).token : null;
       console.log('📤 Đang gửi 3 ảnh lên server...');
       const response = await axios.post(
-        'http://localhost:5000/api/attendance/register-face',
+        '/api/attendance/register-face',
         { images: images },
         {
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },

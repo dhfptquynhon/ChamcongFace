@@ -703,7 +703,7 @@ const handleCancelTrucThay = async (cell, setLoading, auth, showSnackbar, fetchS
     console.log('Gọi API hủy trực thay với ID:', lich_truc_goc_id);
     
     const res = await axios.delete(
-      `http://localhost:5000/api/attendance/truc-thay/cancel/${lich_truc_goc_id}`,
+      `/api/attendance/truc-thay/cancel/${lich_truc_goc_id}`,
       { 
         headers: { Authorization: `Bearer ${auth.token}` },
         timeout: 10000
@@ -978,7 +978,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       debugLog('Đang load ca trực thay...');
       
       const res = await axios.get(
-        'http://localhost:5000/api/attendance/truc-thay/my-shifts',
+        '/api/attendance/truc-thay/my-shifts',
         { 
           headers: { Authorization: `Bearer ${auth.token}` },
           timeout: 10000 // 10 giây timeout
@@ -1019,7 +1019,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     if (!auth?.token) return;
     try {
       const res = await axios.get(
-        'http://localhost:5000/api/attendance/truc-thay/received-shifts',
+        '/api/attendance/truc-thay/received-shifts',
         { headers: { Authorization: `Bearer ${auth.token}` }, timeout: 10000 }
       );
       if (res.data.success && res.data.data) {
@@ -1041,7 +1041,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     
     try {
       const res = await axios.get(
-        'http://localhost:5000/api/attendance/my/time-adjustments',
+        '/api/attendance/my/time-adjustments',
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       
@@ -1080,7 +1080,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     setLoading(true);
     setError('');
     try {
-      const res = await axios.get(`http://localhost:5000/api/attendance/schedule?month=${month}&year=${year}`, {
+      const res = await axios.get(`/api/attendance/schedule?month=${month}&year=${year}`, {
         headers: { Authorization: `Bearer ${auth.token}` },
       });
       
@@ -1121,7 +1121,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     
     setFetchingEmployees(true);
     try {
-      const res = await axios.get('http://localhost:5000/api/attendance/admin/employees', {
+      const res = await axios.get('/api/attendance/admin/employees', {
         headers: { Authorization: `Bearer ${auth.token}` },
       });
       const filteredEmployees = res.data.filter(emp => 
@@ -1141,7 +1141,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     if (!auth?.token) return;
     
     try {
-      const res = await axios.get(`http://localhost:5000/api/attendance/daily-summary?date=${date}`, {
+      const res = await axios.get(`/api/attendance/daily-summary?date=${date}`, {
         headers: { Authorization: `Bearer ${auth.token}` },
       });
       return res.data;
@@ -1156,7 +1156,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     if (!auth?.token) return;
     
     try {
-      const res = await axios.get(`http://localhost:5000/api/attendance/monthly-report?month=${month}&year=${year}`, {
+      const res = await axios.get(`/api/attendance/monthly-report?month=${month}&year=${year}`, {
         headers: { Authorization: `Bearer ${auth.token}` },
       });
       return res.data;
@@ -1275,7 +1275,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
   try {
     setLoading(true);
     const res = await axios.post(
-      'http://localhost:5000/api/attendance/truc-thay/request',
+      '/api/attendance/truc-thay/request',
       {
         lich_truc_id: selectedUser.id,   // ID của lịch gốc của người được chọn
         ly_do: lyDo || 'Không có lý do'
@@ -1314,7 +1314,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       debugLog('Đang check-in trực thay...', { lich_truc_ao_id });
       
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/truc-thay/checkin/${lich_truc_ao_id}`,
+        `/api/attendance/truc-thay/checkin/${lich_truc_ao_id}`,
         {},
         { 
           headers: { Authorization: `Bearer ${auth.token}` },
@@ -1364,7 +1364,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       debugLog('Đang check-out trực thay...', { lich_truc_ao_id });
       
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/truc-thay/checkout/${lich_truc_ao_id}`,
+        `/api/attendance/truc-thay/checkout/${lich_truc_ao_id}`,
         {},
         { 
           headers: { Authorization: `Bearer ${auth.token}` },
@@ -1463,7 +1463,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       setLoading(true);
       
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/schedule/${cell.id}/request-time-adjustment`,
+        `/api/attendance/schedule/${cell.id}/request-time-adjustment`,
         {
           loai_yeu_cau: loaiYeuCau,
           thoi_gian_de_xuat: thoiGianDeXuat,
@@ -1524,7 +1524,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     try {
       setLoading(true);
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/schedule/${cell.id}/checkout`,
+        `/api/attendance/schedule/${cell.id}/checkout`,
         {},
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
@@ -1594,7 +1594,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     
     try {
       const res = await axios.post(
-        'http://localhost:5000/api/attendance/schedule/register',
+        '/api/attendance/schedule/register',
         { date, shift: shiftKey },
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
@@ -1730,7 +1730,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     try {
       setLoading(true);
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/schedule/${cell.id}/checkin`,
+        `/api/attendance/schedule/${cell.id}/checkin`,
         {},
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
@@ -1810,7 +1810,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     try {
       setLoading(true);
       const res = await axios.delete(
-        `http://localhost:5000/api/attendance/schedule/${cell.id}/cancel`,
+        `/api/attendance/schedule/${cell.id}/cancel`,
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       
@@ -1841,7 +1841,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
 
     try {
       const res = await axios.get(
-        'http://localhost:5000/api/attendance/truc-thay/my-shifts',
+        '/api/attendance/truc-thay/my-shifts',
         { 
           headers: { Authorization: `Bearer ${auth.token}` },
           timeout: 10000

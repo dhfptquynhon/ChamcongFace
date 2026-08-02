@@ -37,7 +37,7 @@ const ForgotPassword = () => {
 
     try {
       await axios.post(
-        'http://localhost:5000/api/attendance/admin/reset-password',
+        '/api/attendance/admin/reset-password',
         { ma_nhan_vien, new_password },
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );

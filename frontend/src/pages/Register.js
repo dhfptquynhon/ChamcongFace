@@ -25,7 +25,7 @@ const Register = () => {
     e.preventDefault();
     try {
       await axios.post(
-        'http://localhost:5000/api/auth/register',
+        '/api/auth/register',
         { ma_nhan_vien, ten_nhan_vien, password },
         { headers: { Authorization: `Bearer ${auth.token}` } } // gửi token admin
       );

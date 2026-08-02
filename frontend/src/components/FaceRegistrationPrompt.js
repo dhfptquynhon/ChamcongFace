@@ -12,7 +12,7 @@ const FaceRegistrationPrompt = ({ auth, onClose, onSuccess }) => {
     const check = async () => {
       try {
         const token = auth.token;
-        const response = await axios.get('http://localhost:5000/api/attendance/check-face-registered', {
+        const response = await axios.get('/api/attendance/check-face-registered', {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (response.data.success) {

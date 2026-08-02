@@ -75,7 +75,7 @@ const Attendance = ({ onChanged }) => {
     setMessage('');
     try {
       const res = await axios.get(
-        `http://localhost:5000/api/attendance/my/today-shifts?date=${todayStr}`,
+        `/api/attendance/my/today-shifts?date=${todayStr}`,
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       // Sắp xếp theo thứ tự ca
@@ -127,7 +127,7 @@ const Attendance = ({ onChanged }) => {
 
     try {
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/schedule/${shift.id}/request-time-adjustment`,
+        `/api/attendance/schedule/${shift.id}/request-time-adjustment`,
         {
           loai_yeu_cau: loaiYeuCau,
           thoi_gian_de_xuat: thoiGianDeXuat,
@@ -171,8 +171,8 @@ const Attendance = ({ onChanged }) => {
     setError('');
     try {
       const url = shift.is_truc_thay
-        ? `http://localhost:5000/api/attendance/truc-thay/checkin/${shift.lich_truc_ao_id || shift.id}`
-        : `http://localhost:5000/api/attendance/schedule/${shift.id}/checkin`;
+        ? `/api/attendance/truc-thay/checkin/${shift.lich_truc_ao_id || shift.id}`
+        : `/api/attendance/schedule/${shift.id}/checkin`;
       const res = await axios.post(
         url,
         {},
@@ -211,8 +211,8 @@ const Attendance = ({ onChanged }) => {
     setError('');
     try {
       const url = shift.is_truc_thay
-        ? `http://localhost:5000/api/attendance/truc-thay/checkout/${shift.lich_truc_ao_id || shift.id}`
-        : `http://localhost:5000/api/attendance/schedule/${shift.id}/checkout`;
+        ? `/api/attendance/truc-thay/checkout/${shift.lich_truc_ao_id || shift.id}`
+        : `/api/attendance/schedule/${shift.id}/checkout`;
       const res = await axios.post(
         url,
         {},

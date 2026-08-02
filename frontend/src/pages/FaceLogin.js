@@ -318,7 +318,7 @@ const FaceLogin = () => {
     }
     console.log('📸 Ảnh chụp được, độ dài:', imageSrc.length);
     try {
-      const response = await axios.post('http://localhost:5000/api/attendance/login-face', { image: imageSrc });
+      const response = await axios.post('/api/attendance/login-face', { image: imageSrc });
       console.log('📥 Server response:', response.data);
       if (response.data.success) {
         if (response.data.requireCode) {
@@ -355,7 +355,7 @@ const FaceLogin = () => {
     }
     setIsProcessing(true);
     try {
-      const response = await axios.post('http://localhost:5000/api/attendance/login-face-verify', {
+      const response = await axios.post('/api/attendance/login-face-verify', {
         userId: tempUserId,
         code: verificationCode
       });

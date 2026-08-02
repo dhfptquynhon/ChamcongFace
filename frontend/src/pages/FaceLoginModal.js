@@ -77,7 +77,7 @@ const FaceRegisterModal = ({ onClose, onSuccess }) => {
             const authData = localStorage.getItem('auth');
             const token = authData ? JSON.parse(authData).token : null;
             const response = await axios.post(
-                'http://localhost:5000/api/attendance/register-face',
+                '/api/attendance/register-face',
                 { image: imageSrc },
                 {
                     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },

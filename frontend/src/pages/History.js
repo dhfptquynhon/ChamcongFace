@@ -19,7 +19,7 @@ const History = () => {
     const fetchHistory = async () => {
       try {
           const response = await axios.get(
-            `http://localhost:5000/api/attendance/history/month?month=${month}&year=${year}`,
+            `/api/attendance/history/month?month=${month}&year=${year}`,
             {
               headers: {
                 Authorization: `Bearer ${auth.token}`

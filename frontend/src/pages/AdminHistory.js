@@ -1870,7 +1870,7 @@ const [faceSettingsDialog, setFaceSettingsDialog] = useState({
     const { employee, face_login_enabled, face_code, face_code_enabled } = faceSettingsDialog;
     setFaceSettingsDialog(prev => ({ ...prev, loading: true, error: '' }));
     try {
-      await axios.put(`http://localhost:5000/api/attendance/admin/employee/${employee.id}/face-settings`, {
+      await axios.put(`/api/attendance/admin/employee/${employee.id}/face-settings`, {
         face_login_enabled,
         face_code: face_code_enabled ? face_code : null,
         face_code_enabled
@@ -1900,7 +1900,7 @@ const handleDeleteFaceData = async () => {
   const deleteFaceData = async (employeeId) => {
     if (!window.confirm('Bạn có chắc muốn xóa dữ liệu khuôn mặt của nhân viên này? Nhân viên sẽ cần đăng ký lại.')) return;
     try {
-      await axios.delete(`http://localhost:5000/api/attendance/admin/employee/${employeeId}/face-data`, {
+      await axios.delete(`/api/attendance/admin/employee/${employeeId}/face-data`, {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
       showSnackbar('Đã xóa dữ liệu khuôn mặt', 'success');
@@ -1933,7 +1933,7 @@ const handleDeleteFaceData = async () => {
     setRevertLoading(true);
     try {
       const response = await axios.post(
-        `http://localhost:5000/api/attendance/admin/schedule/${recordId}/revert-checkout`,
+        `/api/attendance/admin/schedule/${recordId}/revert-checkout`,
         {},
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
@@ -1950,7 +1950,7 @@ const handleDeleteFaceData = async () => {
   // Hàm lấy tất cả lịch sử trực thay
   const fetchAllTrucThay = useCallback(async (month, year) => {
     try {
-      const res = await axios.get('http://localhost:5000/api/attendance/admin/tructhay/all', {
+      const res = await axios.get('/api/attendance/admin/tructhay/all', {
         params: { month, year },
         headers: { Authorization: `Bearer ${auth.token}` }
       });
@@ -1964,7 +1964,7 @@ const handleDeleteFaceData = async () => {
   // Hàm lấy tất cả lịch sử yêu cầu điều chỉnh
   const fetchAllTimeAdjustments = useCallback(async (month, year) => {
     try {
-      const res = await axios.get('http://localhost:5000/api/attendance/admin/time-adjustments/all', {
+      const res = await axios.get('/api/attendance/admin/time-adjustments/all', {
         params: { month, year },
         headers: { Authorization: `Bearer ${auth.token}` }
       });
@@ -1981,7 +1981,7 @@ const handleDeleteFaceData = async () => {
     
     setLoadingRequests(true);
     try {
-      const response = await axios.get('http://localhost:5000/api/attendance/admin/pending-time-adjustments', {
+      const response = await axios.get('/api/attendance/admin/pending-time-adjustments', {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
       setTimeAdjustmentRequests(response.data);
@@ -1999,7 +1999,7 @@ const handleDeleteFaceData = async () => {
     
     setLoadingTrucThay(true);
     try {
-      const res = await axios.get('http://localhost:5000/api/attendance/admin/pending-tructhay', {
+      const res = await axios.get('/api/attendance/admin/pending-tructhay', {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
       setTrucThayRequests(res.data);
@@ -2017,7 +2017,7 @@ const handleDeleteFaceData = async () => {
       setLoadingRequests(true);
       
       const response = await axios.post(
-        `http://localhost:5000/api/attendance/admin/time-adjustment/${requestId}/process`,
+        `/api/attendance/admin/time-adjustment/${requestId}/process`,
         { approve, thoi_gian_dieu_chinh: adjustedTime, ghi_chu_admin: adminNote },
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
@@ -2047,7 +2047,7 @@ const handleDeleteFaceData = async () => {
     try {
       setLoadingTrucThay(true);
       const res = await axios.post(
-        `http://localhost:5000/api/attendance/admin/tructhay/${requestId}/approve`,
+        `/api/attendance/admin/tructhay/${requestId}/approve`,
         { approve },
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
@@ -2082,7 +2082,7 @@ useEffect(() => {
     
     setLoadingRegisteredUsers(true);
     try {
-      const response = await axios.get('http://localhost:5000/api/attendance/admin/registered-users', {
+      const response = await axios.get('/api/attendance/admin/registered-users', {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
       setRegisteredUsers(response.data);
@@ -2100,7 +2100,7 @@ const fetchEmployees = async () => {
   
   setLoadingEmployees(true);
   try {
-    const response = await axios.get('http://localhost:5000/api/attendance/admin/employees', {
+    const response = await axios.get('/api/attendance/admin/employees', {
       headers: { Authorization: `Bearer ${auth.token}` }
     });
     const nonAdminEmployees = (response.data || []).filter(emp => !emp.is_admin);
@@ -2118,7 +2118,7 @@ const loadEmployeesWithStats = async () => {
   if (!auth?.token) return;
   setLoadingEmployees(true);
   try {
-    const empRes = await axios.get('http://localhost:5000/api/attendance/admin/employees', {
+    const empRes = await axios.get('/api/attendance/admin/employees', {
       headers: { Authorization: `Bearer ${auth.token}` }
     });
     const nonAdminEmployees = (empRes.data || []).filter(emp => !emp.is_admin);
@@ -2128,7 +2128,7 @@ const loadEmployeesWithStats = async () => {
       nonAdminEmployees.map(async (emp) => {
         try {
           const statsRes = await axios.get(
-            `http://localhost:5000/api/attendance/admin/employee/${emp.id}/monthly-stats?month=${statsMonth}&year=${statsYear}`,
+            `/api/attendance/admin/employee/${emp.id}/monthly-stats?month=${statsMonth}&year=${statsYear}`,
             { headers: { Authorization: `Bearer ${auth.token}` } }
           );
           return {
@@ -2164,7 +2164,7 @@ const loadEmployeesWithStats = async () => {
     
     try {
       const response = await axios.get(
-        `http://localhost:5000/api/attendance/admin/employee/${userId}/detail?month=${selectedMonth}&year=${selectedYear}`,
+        `/api/attendance/admin/employee/${userId}/detail?month=${selectedMonth}&year=${selectedYear}`,
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       
@@ -2196,7 +2196,7 @@ const loadEmployeesWithStats = async () => {
           if (!employee) continue;
           
           const attendanceRes = await axios.get(
-            `http://localhost:5000/api/attendance/admin/employee/${employeeId}/attendance?month=${month}&year=${year}`,
+            `/api/attendance/admin/employee/${employeeId}/attendance?month=${month}&year=${year}`,
             { headers: { Authorization: `Bearer ${auth.token}` } }
           );
           
@@ -2217,7 +2217,7 @@ const loadEmployeesWithStats = async () => {
           });
           
           const statsRes = await axios.get(
-            `http://localhost:5000/api/attendance/admin/employee/${employeeId}/monthly-stats?month=${month}&year=${year}`,
+            `/api/attendance/admin/employee/${employeeId}/monthly-stats?month=${month}&year=${year}`,
             { headers: { Authorization: `Bearer ${auth.token}` } }
           );
           statsData[employeeId] = statsRes.data;
@@ -2447,7 +2447,7 @@ const loadEmployeesWithStats = async () => {
       setLoadingEmployees(true);
       
       if (mode === 'create') {
-        await axios.post('http://localhost:5000/api/attendance/admin/employees/create', {
+        await axios.post('/api/attendance/admin/employees/create', {
           ma_nhan_vien: employee.ma_nhan_vien,
           ten_nhan_vien: employee.ten_nhan_vien,
           password: employee.password,
@@ -2464,7 +2464,7 @@ const loadEmployeesWithStats = async () => {
         if (employee.password) {
           updateData.password = employee.password;
         }
-        await axios.put(`http://localhost:5000/api/attendance/admin/employees/${employee.id}`, updateData, {
+        await axios.put(`/api/attendance/admin/employees/${employee.id}`, updateData, {
           headers: { Authorization: `Bearer ${auth.token}` }
         });
         showSnackbar('Cập nhật nhân viên thành công!', 'success');
@@ -2489,7 +2489,7 @@ const loadEmployeesWithStats = async () => {
 
     try {
       setLoadingEmployees(true);
-      await axios.delete(`http://localhost:5000/api/attendance/admin/employees/${employeeId}`, {
+      await axios.delete(`/api/attendance/admin/employees/${employeeId}`, {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
       
@@ -2535,7 +2535,7 @@ const loadEmployeesWithStats = async () => {
     try {
       setLoadingEmployees(true);
       await axios.post(
-        'http://localhost:5000/api/attendance/admin/reset-password',
+        '/api/attendance/admin/reset-password',
         { ma_nhan_vien: employee.ma_nhan_vien, new_password: newPassword },
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
