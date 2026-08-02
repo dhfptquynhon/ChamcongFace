@@ -66,6 +66,7 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 import AuthContext from '../context/AuthContext';
+import * as XLSX from 'xlsx-js-style';
 
 const SHIFTS = [
   { key: 'ca1', label: 'Ca 1: 7:00-9:30', start: '07:00', end: '09:30' },
@@ -109,134 +110,193 @@ const formatHours = (decimalHours) => {
   return `${hours} giờ ${minutes} phút`;
 };
 
-// Hàm xuất file Excel từ dữ liệu báo cáo tháng
+// ===== Helper style dùng chung khi xuất Excel báo cáo tháng =====
+const xlsxEnsureCell = (ws, r, c) => {
+  const addr = XLSX.utils.encode_cell({ r, c });
+  if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+  return ws[addr];
+};
+const XLSX_THIN_BORDER = {
+  top: { style: 'thin', color: { rgb: 'B0B0B0' } },
+  bottom: { style: 'thin', color: { rgb: 'B0B0B0' } },
+  left: { style: 'thin', color: { rgb: 'B0B0B0' } },
+  right: { style: 'thin', color: { rgb: 'B0B0B0' } }
+};
+const XLSX_CENTER = { horizontal: 'center', vertical: 'center', wrapText: true };
+const XLSX_HEADER_STYLE = {
+  font: { bold: true, color: { rgb: 'FFFFFF' } },
+  alignment: XLSX_CENTER,
+  fill: { fgColor: { rgb: '1976D2' } },
+  border: XLSX_THIN_BORDER
+};
+const XLSX_SECTION_STYLE = {
+  font: { bold: true, color: { rgb: 'FFFFFF' } },
+  alignment: { horizontal: 'left', vertical: 'center' },
+  fill: { fgColor: { rgb: 'FF9800' } },
+  border: XLSX_THIN_BORDER
+};
+
+// Hàm xuất file Excel (.xlsx thật, có viền/màu) từ dữ liệu báo cáo tháng
 const exportMonthlyReportToExcel = (reportData, employeeName, month, year) => {
   if (!reportData) return;
-  
-  try {
-    // Tạo workbook (sử dụng sheetjs-style logic)
-    const headers = [
-      ['BÁO CÁO CHẤM CÔNG THÁNG', '', '', '', '', '', '', '', '', ''],
-      ['Nhân viên:', employeeName, '', '', 'Tháng:', `${pad(month)}/${year}`, '', '', '', ''],
-      ['', '', '', '', '', '', '', '', '', ''],
-      [
-        'STT',
-        'Ngày',
-        'Thứ',
-        'Ca làm việc',
-        'Giờ vào',
-        'Giờ ra',
-        'Thời gian làm (giờ)',
-        'Thời gian làm (phút)',
-        'Trạng thái',
-        'Ghi chú'
-      ]
-    ];
-    
-    const rows = [];
-    let stt = 1;
-    
-    // Thêm chi tiết từng ngày
-    if (reportData.daily_reports && Array.isArray(reportData.daily_reports)) {
-      reportData.daily_reports.forEach((dayReport, dayIndex) => {
-        // Tách chi tiết các ca trong ngày
-        if (dayReport.chi_tiet_ca) {
-          const caDetails = dayReport.chi_tiet_ca.split(';');
-          caDetails.forEach((caDetail) => {
-            const [caKey, hours, gioVao, gioRa, nguoiTrucThay] = caDetail.split('|');
-            const shift = SHIFTS.find(s => s.key === caKey) || { label: caKey };
 
-            rows.push([
-              stt++,
-              dayReport.ngay ? new Date(dayReport.ngay).toLocaleDateString('vi-VN') : '',
-              dayReport.ngay ? dayNames[new Date(dayReport.ngay).getDay()] : '',
-              shift.label,
-              gioVao || '',
-              gioRa || '',
-              Number(hours).toFixed(2),
-              Math.round(Number(hours) * 60),
-              'Hoàn thành',
-              nguoiTrucThay ? `${nguoiTrucThay} trực thay cho bạn ca này` : ''
-            ]);
+  try {
+    const ws = {};
+    const LAST_COL = 8; // 9 cột: STT..Thời gian làm (index 0-8)
+    const merges = [];
+    let r = 0;
+
+    // ----- Tiêu đề -----
+    const titleCell = xlsxEnsureCell(ws, r, 0);
+    titleCell.v = `BÁO CÁO CHẤM CÔNG THÁNG ${pad(month)}/${year}`;
+    titleCell.s = { font: { bold: true, sz: 14 }, alignment: { horizontal: 'center', vertical: 'center' } };
+    merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+    r++;
+
+    const subCell = xlsxEnsureCell(ws, r, 0);
+    subCell.v = `Nhân viên: ${employeeName}    -    Tháng: ${pad(month)}/${year}`;
+    subCell.s = { font: { italic: true, sz: 11 }, alignment: { horizontal: 'center', vertical: 'center' } };
+    merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+    r += 2;
+
+    // ----- Header bảng chi tiết -----
+    const detailHeaders = ['STT', 'Ngày', 'Thứ', 'Ca làm việc', 'Loại ca', 'Người trực thay', 'Giờ vào', 'Giờ ra', 'Thời gian làm (giờ)'];
+    detailHeaders.forEach((h, c) => {
+      const cell = xlsxEnsureCell(ws, r, c);
+      cell.v = h;
+      cell.s = XLSX_HEADER_STYLE;
+    });
+    r++;
+
+    // ----- Dữ liệu chi tiết từng ca trong tháng -----
+    let stt = 1;
+    let totalHours = 0;
+    let totalShiftRows = 0;
+    if (reportData.daily_reports && Array.isArray(reportData.daily_reports)) {
+      reportData.daily_reports.forEach((dayReport) => {
+        if (!dayReport.chi_tiet_ca) return;
+        const caDetails = dayReport.chi_tiet_ca.split(';');
+        caDetails.forEach((caDetail) => {
+          const [caKey, hoursStr, gioVao, gioRa, nguoiTrucThay] = caDetail.split('|');
+          const shift = SHIFTS.find(s => s.key === caKey) || { label: caKey };
+          const hours = Number(hoursStr) || 0;
+          totalHours += hours;
+          totalShiftRows++;
+          const isTrucThay = !!nguoiTrucThay;
+
+          const values = [
+            stt++,
+            dayReport.ngay ? new Date(dayReport.ngay).toLocaleDateString('vi-VN') : '',
+            dayReport.ngay ? dayNames[new Date(dayReport.ngay).getDay()] : '',
+            shift.label,
+            isTrucThay ? '🔄 Trực thay' : 'Ca thường',
+            isTrucThay ? nguoiTrucThay : '—',
+            gioVao || '--:--',
+            gioRa || '--:--',
+            hours.toFixed(2)
+          ];
+          values.forEach((v, c) => {
+            const cell = xlsxEnsureCell(ws, r, c);
+            cell.v = v;
+            cell.t = (c === 0 || c === 8) ? 'n' : 's';
+            cell.s = {
+              alignment: XLSX_CENTER,
+              border: XLSX_THIN_BORDER,
+              ...(isTrucThay ? { fill: { fgColor: { rgb: 'FFF3E0' } } } : {}),
+              ...(isTrucThay && (c === 4 || c === 5) ? { font: { bold: true, color: { rgb: 'E65100' } } } : {})
+            };
           });
-        }
+          r++;
+        });
       });
     }
     
     
-    // Thêm tổng kết
-    if (rows.length > 0) {
-      const totalHours = rows.reduce((sum, row) => sum + parseFloat(row[6]), 0);
-      const totalMinutes = rows.reduce((sum, row) => sum + parseInt(row[7]), 0);
-      
-      rows.push([]);
-      rows.push(['', '', '', '', '', '', '', '', '', '']);
-      rows.push(['TỔNG KẾT THÁNG', '', '', '', '', '',
-        totalHours.toFixed(2),
-        totalMinutes,
-        '',
-        `Số ngày làm: ${reportData.daily_reports.length}, Tổng ca: ${reportData.monthly_summary.tong_so_ca}`
-      ]);
-    }
+    // ----- Tổng kết tháng -----
+    r++;
+    const sumLabelCell = xlsxEnsureCell(ws, r, 0);
+    sumLabelCell.v = 'TỔNG KẾT THÁNG';
+    for (let c = 0; c <= LAST_COL; c++) xlsxEnsureCell(ws, r, c).s = XLSX_SECTION_STYLE;
+    merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+    r++;
 
-    // Bảng trực thay 2 chiều: bạn được ai trực thay (cần trả tiền họ) và bạn trực thay cho ai (họ cần trả bạn)
+    xlsxEnsureCell(ws, r, 0).v = 'Tổng số ngày làm:';
+    xlsxEnsureCell(ws, r, 1).v = reportData.monthly_summary?.tong_so_ngay ?? 0;
+    xlsxEnsureCell(ws, r, 3).v = 'Tổng số ca:';
+    xlsxEnsureCell(ws, r, 4).v = totalShiftRows;
+    xlsxEnsureCell(ws, r, 6).v = 'Tổng giờ làm:';
+    xlsxEnsureCell(ws, r, 7).v = Number(totalHours.toFixed(2));
+    ws[XLSX.utils.encode_cell({ r, c: 7 })].t = 'n';
+    for (let c = 0; c <= LAST_COL; c++) {
+      const cell = xlsxEnsureCell(ws, r, c);
+      cell.s = { font: { bold: [0, 3, 6].includes(c) }, alignment: XLSX_CENTER, border: XLSX_THIN_BORDER, fill: { fgColor: { rgb: 'F0F7FF' } } };
+    }
+    r += 2;
+
+    // ----- Bảng trực thay 2 chiều -----
     const receivedList = reportData.substitution_summary || [];
     const performedList = reportData.performed_substitution_summary || [];
-    if (receivedList.length > 0 || performedList.length > 0) {
-      rows.push([]);
-      rows.push(['BẢNG TRỰC THAY THÁNG', '', '', '', '', '', '', '', '', '']);
-      rows.push(['Người', '', '', '', '', '', 'Tổng giờ', 'Tổng phút', 'Số ca', 'Ghi chú']);
 
-      if (receivedList.length > 0) {
-        rows.push([]);
-        rows.push(['Bạn được trực thay bởi (bạn cần thanh toán lại):', '', '', '', '', '', '', '', '', '']);
-        receivedList.forEach((row) => {
-          rows.push([
-            '', row.ten_nguoi_truc_thay, '', '', '', '',
-            Number(row.tong_gio).toFixed(2),
-            Math.round(Number(row.tong_gio) * 60),
-            row.so_ca,
-            `Thanh toán lại ${row.tong_gio}h cho ${row.ten_nguoi_truc_thay}`
-          ]);
+    const renderLedgerSection = (title, list, nameField, emptyNote) => {
+      const headerCell = xlsxEnsureCell(ws, r, 0);
+      headerCell.v = title;
+      for (let c = 0; c <= LAST_COL; c++) xlsxEnsureCell(ws, r, c).s = XLSX_SECTION_STYLE;
+      merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+      r++;
+
+      xlsxEnsureCell(ws, r, 0).v = 'STT';
+      xlsxEnsureCell(ws, r, 1).v = 'Người';
+      xlsxEnsureCell(ws, r, 4).v = 'Số ca';
+      xlsxEnsureCell(ws, r, 6).v = 'Tổng giờ';
+      xlsxEnsureCell(ws, r, 8).v = 'Thành tiền (22.000đ/h)';
+      for (let c = 0; c <= LAST_COL; c++) xlsxEnsureCell(ws, r, c).s = XLSX_HEADER_STYLE;
+      merges.push({ s: { r, c: 1 }, e: { r, c: 3 } });
+      merges.push({ s: { r, c: 4 }, e: { r, c: 5 } });
+      merges.push({ s: { r, c: 6 }, e: { r, c: 7 } });
+      r++;
+
+      if (list.length === 0) {
+        xlsxEnsureCell(ws, r, 0).v = emptyNote;
+        xlsxEnsureCell(ws, r, 0).s = { font: { italic: true, color: { rgb: '757575' } }, border: XLSX_THIN_BORDER };
+        merges.push({ s: { r, c: 0 }, e: { r, c: LAST_COL } });
+        r++;
+      } else {
+        list.forEach((row, idx) => {
+          const hours = Number(row.tong_gio) || 0;
+          xlsxEnsureCell(ws, r, 0).v = idx + 1;
+          xlsxEnsureCell(ws, r, 1).v = row[nameField];
+          xlsxEnsureCell(ws, r, 4).v = row.so_ca;
+          xlsxEnsureCell(ws, r, 6).v = Number(hours.toFixed(2));
+          xlsxEnsureCell(ws, r, 8).v = `${(hours * 22000).toLocaleString('vi-VN')}đ`;
+          merges.push({ s: { r, c: 1 }, e: { r, c: 3 } });
+          merges.push({ s: { r, c: 4 }, e: { r, c: 5 } });
+          merges.push({ s: { r, c: 6 }, e: { r, c: 7 } });
+          for (let c = 0; c <= LAST_COL; c++) {
+            const cell = xlsxEnsureCell(ws, r, c);
+            cell.t = (c === 0 || c === 4 || c === 6) ? 'n' : 's';
+            cell.s = { alignment: XLSX_CENTER, border: XLSX_THIN_BORDER, fill: { fgColor: { rgb: 'FFF8EF' } } };
+          }
+          r++;
         });
       }
+      r++;
+    };
 
-      if (performedList.length > 0) {
-        rows.push([]);
-        rows.push(['Bạn đã trực thay cho (họ cần thanh toán lại bạn):', '', '', '', '', '', '', '', '', '']);
-        performedList.forEach((row) => {
-          rows.push([
-            '', row.ten_nguoi_duoc_truc_thay, '', '', '', '',
-            Number(row.tong_gio).toFixed(2),
-            Math.round(Number(row.tong_gio) * 60),
-            row.so_ca,
-            `${row.ten_nguoi_duoc_truc_thay} thanh toán lại ${row.tong_gio}h cho bạn`
-          ]);
-        });
-      }
-    }
+    renderLedgerSection('🙌 BẠN ĐƯỢC TRỰC THAY BỞI (bạn cần thanh toán lại)', receivedList, 'ten_nguoi_truc_thay', 'Không có ai trực thay cho bạn tháng này.');
+    renderLedgerSection('🙋 BẠN ĐÃ TRỰC THAY CHO (họ cần thanh toán lại bạn)', performedList, 'ten_nguoi_duoc_truc_thay', 'Bạn chưa trực thay cho ai tháng này.');
 
-    // Tạo nội dung CSV (đơn giản nhất để xuất)
-    const csvContent = [
-      ...headers.map(row => row.join(',')),
-      ...rows.map(row => row.join(','))
-    ].join('\n');
-    
-    // Tạo file blob với BOM cho UTF-8
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    
-    // Tạo link download
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `BaoCaoChamCong_${employeeName}_${pad(month)}_${year}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    URL.revokeObjectURL(url);
-    
+    // ----- Hoàn thiện sheet -----
+    ws['!merges'] = merges;
+    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(r, 1), c: LAST_COL } });
+    ws['!cols'] = [
+      { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 20 }, { wch: 12 },
+      { wch: 16 }, { wch: 10 }, { wch: 10 }, { wch: 18 }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `Thang ${month}`);
+    XLSX.writeFile(wb, `BaoCaoChamCong_${employeeName}_${pad(month)}_${year}.xlsx`);
+
     return true;
   } catch (error) {
     console.error('Lỗi xuất Excel:', error);
@@ -850,7 +910,8 @@ const ScheduleBoard = ({ refreshToken }) => {
     open: false,
     date: null,
     summary: null,
-    details: []
+    details: [],
+    performedToday: []
   });
   const [monthlyReportDialog, setMonthlyReportDialog] = useState({
     open: false,
@@ -1593,7 +1654,8 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       open: true,
       date: date,
       summary: summary?.formatted_summary || null,
-      details: summary?.details || []
+      details: summary?.details || [],
+      performedToday: summary?.performed_today || []
     });
   };
 
@@ -1602,7 +1664,8 @@ const [trucThayDialog, setTrucThayDialog] = useState({
       open: false,
       date: null,
       summary: null,
-      details: []
+      details: [],
+      performedToday: []
     });
   };
 
@@ -3683,9 +3746,21 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                     </TableHead>
                     <TableBody>
                       {dailySummaryDialog.details.map((detail, index) => (
-                        <TableRow key={index}>
+                        <TableRow
+                          key={index}
+                          sx={detail.loai_lich === 'virtual' ? { backgroundColor: '#fff8ef' } : undefined}
+                        >
                           <TableCell>
-                            {SHIFTS.find(s => s.key === detail.ca)?.label || detail.ca}
+                            <Typography variant="body2">
+                              {SHIFTS.find(s => s.key === detail.ca)?.label || detail.ca}
+                            </Typography>
+                            {detail.loai_lich === 'virtual' && (
+                              <Chip
+                                size="small"
+                                label={`🔄 Trực thay bởi ${detail.ten_nguoi_truc_thay}`}
+                                sx={{ mt: 0.5, bgcolor: '#ff9800', color: 'white', fontWeight: 600, fontSize: '0.6rem', height: 18 }}
+                              />
+                            )}
                           </TableCell>
                           <TableCell>
                             {detail.gio_vao ? (typeof detail.gio_vao === 'string' ? detail.gio_vao.substring(0, 5) : detail.gio_vao) : '--:--'}
@@ -3697,10 +3772,10 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                             {detail.thoi_gian_lam ? `${Number(detail.thoi_gian_lam).toFixed(2)} giờ` : '--'}
                           </TableCell>
                           <TableCell>
-                            <Chip 
+                            <Chip
                               size="small"
                               label={statusLabel[detail.trang_thai] || detail.trang_thai}
-                              sx={{ 
+                              sx={{
                                 fontSize: '0.6rem',
                                 height: '20px',
                                 backgroundColor: statusColor[detail.trang_thai] || '#e0e0e0',
@@ -3716,6 +3791,31 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                 <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
                   Không có dữ liệu chi tiết
                 </Typography>
+              )}
+
+              {dailySummaryDialog.performedToday.length > 0 && (
+                <Box sx={{ mt: 2, p: 1.5, borderRadius: 1.5, border: '1px solid #ffe0b2', backgroundColor: '#fff8ef' }}>
+                  <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1 }}>
+                    🙋 Bạn đã trực thay cho người khác ngày này
+                  </Typography>
+                  <Stack spacing={0.75}>
+                    {dailySummaryDialog.performedToday.map((p) => (
+                      <Box key={p.id} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                        <Typography variant="body2">
+                          {SHIFTS.find(s => s.key === p.ca)?.label || p.ca} - Trực thay cho <strong>{p.ten_nguoi_duoc_truc_thay}</strong>
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={p.thoi_gian_lam ? `${Number(p.thoi_gian_lam).toFixed(2)}h` : 'Chưa hoàn thành'}
+                          sx={{ bgcolor: '#ff9800', color: 'white', fontWeight: 'bold' }}
+                        />
+                      </Box>
+                    ))}
+                  </Stack>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                    Giờ này đã tính vào bảng công của người được trực thay — họ cần thanh toán lại cho bạn.
+                  </Typography>
+                </Box>
               )}
             </>
           ) : (

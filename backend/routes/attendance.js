@@ -4107,37 +4107,61 @@ router.get('/daily-summary', auth, async (req, res) => {
     }
     const nhan_vien_id = empRows[0].id;
 
-    // Lấy tổng thời gian làm việc trong ngày (CÓ GIỜ VÀO, GIỜ RA)
-    const [summary] = await db.query(
-      `SELECT 
-        DATE(ngay) as ngay,
-        COUNT(*) as so_ca_da_lam,
-        SUM(thoi_gian_lam) as tong_thoi_gian_lam,
-        GROUP_CONCAT(CONCAT(ca, ':', thoi_gian_lam, ':', COALESCE(gio_vao, ''), ':', COALESCE(gio_ra, '')) SEPARATOR ';') as chi_tiet_ca
-      FROM lich_truc 
-      WHERE nhan_vien_id = ? 
-        AND DATE(ngay) = ?
-        AND trang_thai = 'checked_out'
-        AND thoi_gian_lam IS NOT NULL
-      GROUP BY DATE(ngay)`,
-      [nhan_vien_id, date]
+    // Chi tiết các ca "thuộc về mình" trong ngày (ca thường + ca được người khác trực thay,
+    // giờ đã quy đổi về mình), kèm thông tin trực thay để hiển thị rõ cho cả 2 bên.
+    const [details] = await db.query(
+      `SELECT
+        lt.id,
+        lt.ca,
+        lt.gio_vao,
+        lt.gio_ra,
+        lt.thoi_gian_lam,
+        lt.trang_thai,
+        lt.created_at,
+        CASE
+          WHEN tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id THEN 'virtual'
+          ELSE 'normal'
+        END as loai_lich,
+        nv_thuc_hien.ten_nhan_vien as ten_nguoi_truc_thay,
+        nv_thuc_hien.ma_nhan_vien as ma_nguoi_truc_thay
+      FROM lich_truc lt
+      LEFT JOIN truc_thay tt ON (tt.lich_truc_ao_id = lt.id OR tt.lich_truc_goc_id = lt.id)
+        AND tt.trang_thai IN ('active', 'completed')
+      LEFT JOIN nhanvien nv_thuc_hien ON tt.nguoi_thuc_hien_id = nv_thuc_hien.id
+      WHERE
+        (
+          (
+            lt.nhan_vien_id = ?
+            AND NOT (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id)
+            AND NOT (tt.id IS NOT NULL AND tt.lich_truc_goc_id = lt.id)
+          )
+          OR
+          (tt.id IS NOT NULL AND tt.lich_truc_ao_id = lt.id AND tt.nguoi_dang_ky_id = ?)
+        )
+        AND DATE(lt.ngay) = ?
+      ORDER BY
+        CASE lt.ca
+          WHEN 'ca1' THEN 1
+          WHEN 'ca2' THEN 2
+          WHEN 'ca3' THEN 3
+          WHEN 'ca4' THEN 4
+        END`,
+      [nhan_vien_id, nhan_vien_id, date]
     );
 
-    // Lấy chi tiết các ca đã làm trong ngày (CÓ GIỜ VÀO, GIỜ RA)
-    const [details] = await db.query(
-      `SELECT 
-        id,
-        ca,
-        gio_vao,
-        gio_ra,
-        thoi_gian_lam,
-        trang_thai,
-        created_at
-      FROM lich_truc 
-      WHERE nhan_vien_id = ? 
-        AND DATE(ngay) = ?
-      ORDER BY 
-        CASE ca
+    // Ca hôm nay mà MÌNH đã trực thay CHO NGƯỜI KHÁC (giờ tính cho người kia, chỉ để tham khảo)
+    const [performedToday] = await db.query(
+      `SELECT
+        lt.id, lt.ca, lt.gio_vao, lt.gio_ra, lt.trang_thai, lt.thoi_gian_lam,
+        nv_dang_ky.ten_nhan_vien as ten_nguoi_duoc_truc_thay,
+        nv_dang_ky.ma_nhan_vien as ma_nguoi_duoc_truc_thay
+      FROM lich_truc lt
+      INNER JOIN truc_thay tt ON tt.lich_truc_ao_id = lt.id AND tt.trang_thai IN ('active', 'completed', 'pending')
+      INNER JOIN nhanvien nv_dang_ky ON tt.nguoi_dang_ky_id = nv_dang_ky.id
+      WHERE lt.nhan_vien_id = ?
+        AND DATE(lt.ngay) = ?
+      ORDER BY
+        CASE lt.ca
           WHEN 'ca1' THEN 1
           WHEN 'ca2' THEN 2
           WHEN 'ca3' THEN 3
@@ -4146,27 +4170,26 @@ router.get('/daily-summary', auth, async (req, res) => {
       [nhan_vien_id, date]
     );
 
+    const completedDetails = details.filter(d => d.trang_thai === 'checked_out' && d.thoi_gian_lam != null);
+    const soCaDaLam = completedDetails.length;
+    const tongThoiGianLam = completedDetails.reduce((sum, d) => sum + (Number(d.thoi_gian_lam) || 0), 0);
+
     const result = {
       date: date,
       employee_id: nhan_vien_id,
       ma_nhan_vien: ma_nhan_vien,
-      summary: summary[0] || {
+      summary: {
         ngay: date,
-        so_ca_da_lam: 0,
-        tong_thoi_gian_lam: 0,
-        chi_tiet_ca: null
+        so_ca_da_lam: soCaDaLam,
+        tong_thoi_gian_lam: tongThoiGianLam
       },
       details: details,
-      formatted_summary: summary[0] ? {
+      performed_today: performedToday,
+      formatted_summary: {
         ngay: date,
-        so_ca_da_lam: summary[0].so_ca_da_lam,
-        tong_thoi_gian_lam: Number(summary[0].tong_thoi_gian_lam).toFixed(2),
-        tong_thoi_gian_gio: formatHours(Number(summary[0].tong_thoi_gian_lam))
-      } : {
-        ngay: date,
-        so_ca_da_lam: 0,
-        tong_thoi_gian_lam: "0.00",
-        tong_thoi_gian_gio: "0 giờ 0 phút"
+        so_ca_da_lam: soCaDaLam,
+        tong_thoi_gian_lam: tongThoiGianLam.toFixed(2),
+        tong_thoi_gian_gio: formatHours(tongThoiGianLam)
       }
     };
 
