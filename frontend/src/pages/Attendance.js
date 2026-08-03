@@ -23,7 +23,10 @@ import {
   Login as LoginIcon,
   Logout as LogoutIcon,
   People as PeopleIcon,
-  Warning as WarningIcon
+  Warning as WarningIcon,
+  ChevronLeft as ChevronLeftIcon,
+  ChevronRight as ChevronRightIcon,
+  Today as TodayIcon
 } from '@mui/icons-material';
 import AuthContext from '../context/AuthContext';
 import axios from 'axios';
@@ -68,14 +71,20 @@ const Attendance = ({ onChanged }) => {
   const today = useMemo(() => new Date(), []);
   const todayStr = today.toISOString().split('T')[0];
 
-  const fetchTodayShifts = async () => {
+  // Ngày đang xem: mặc định hôm nay, có thể lùi về các ngày trước để check-in/check-out
+  // bù cho ca đã quên, hoặc gửi yêu cầu điều chỉnh giờ nếu đã quá hạn check-in trực tiếp.
+  const [viewDate, setViewDate] = useState(todayStr);
+  const isToday = viewDate === todayStr;
+
+  const fetchTodayShifts = async (dateToFetch) => {
     if (!auth?.token) return;
+    const date = dateToFetch || viewDate;
     setLoading(true);
     setError('');
     setMessage('');
     try {
       const res = await axios.get(
-        `/api/attendance/my/today-shifts?date=${todayStr}`,
+        `/api/attendance/my/today-shifts?date=${date}`,
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       // Sắp xếp theo thứ tự ca
@@ -85,7 +94,7 @@ const Attendance = ({ onChanged }) => {
       );
       setShifts(sorted);
     } catch (err) {
-      setError(err.response?.data?.message || 'Không tải được danh sách ca hôm nay');
+      setError(err.response?.data?.message || 'Không tải được danh sách ca của ngày này');
       setShifts([]);
     } finally {
       setLoading(false);
@@ -93,9 +102,17 @@ const Attendance = ({ onChanged }) => {
   };
 
   useEffect(() => {
-    fetchTodayShifts();
+    fetchTodayShifts(viewDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth?.token]);
+  }, [auth?.token, viewDate]);
+
+  const shiftViewDate = (deltaDays) => {
+    const d = new Date(`${viewDate}T00:00:00`);
+    d.setDate(d.getDate() + deltaDays);
+    const next = d.toISOString().split('T')[0];
+    if (next > todayStr) return; // không cho xem ca tương lai
+    setViewDate(next);
+  };
 
   // Hàm mở dialog yêu cầu điều chỉnh giờ
   const handleOpenTimeAdjustmentDialog = (shift, loaiYeuCau, shiftEnd) => {
@@ -272,14 +289,15 @@ const Attendance = ({ onChanged }) => {
     );
   };
 
-  const formattedToday = `${today.getDate()}/${today.getMonth() + 1}/${today.getFullYear()}`;
+  const [viewY, viewM, viewD] = viewDate.split('-').map(Number);
+  const formattedViewDate = `${viewD}/${viewM}/${viewY}`;
 
   return (
     <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1.5 }}>
         <Box>
           <Typography variant="h5" fontWeight={600}>
-            Ca hôm nay của bạn:
+            {isToday ? 'Ca hôm nay của bạn:' : 'Ca của bạn ngày đã chọn:'}
           </Typography>
           <Typography
             variant="body2"
@@ -288,18 +306,56 @@ const Attendance = ({ onChanged }) => {
               color: (theme) => (theme.palette.mode === 'dark' ? '#66bb6a' : '#ffffff')
             }}
           >
-            Ngày: {formattedToday}
+            Ngày: {formattedViewDate}{isToday && ' (hôm nay)'}
           </Typography>
         </Box>
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<RefreshIcon />}
-          onClick={fetchTodayShifts}
-          disabled={loading}
-        >
-          Làm mới
-        </Button>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Tooltip title="Ngày trước - dùng để check-in/check-out bù ca đã quên">
+            <span>
+              <Button variant="outlined" size="small" onClick={() => shiftViewDate(-1)} disabled={loading}>
+                <ChevronLeftIcon fontSize="small" />
+              </Button>
+            </span>
+          </Tooltip>
+
+          <TextField
+            type="date"
+            size="small"
+            value={viewDate}
+            onChange={(e) => e.target.value && setViewDate(e.target.value)}
+            inputProps={{ max: todayStr }}
+            sx={{ width: 160 }}
+          />
+
+          <Tooltip title="Ngày sau">
+            <span>
+              <Button variant="outlined" size="small" onClick={() => shiftViewDate(1)} disabled={loading || isToday}>
+                <ChevronRightIcon fontSize="small" />
+              </Button>
+            </span>
+          </Tooltip>
+
+          {!isToday && (
+            <Tooltip title="Về hôm nay">
+              <span>
+                <Button variant="outlined" size="small" startIcon={<TodayIcon />} onClick={() => setViewDate(todayStr)} disabled={loading}>
+                  Hôm nay
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<RefreshIcon />}
+            onClick={() => fetchTodayShifts()}
+            disabled={loading}
+          >
+            Làm mới
+          </Button>
+        </Box>
       </Box>
 
       {error && (
@@ -320,7 +376,7 @@ const Attendance = ({ onChanged }) => {
       ) : shifts.length === 0 ? (
         <Paper sx={{ p: 3 }}>
           <Typography variant="body1" gutterBottom>
-            Hôm nay bạn chưa đăng ký ca nào.
+            {isToday ? 'Hôm nay bạn chưa đăng ký ca nào.' : `Ngày ${formattedViewDate} bạn chưa đăng ký ca nào.`}
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Vào tab <strong>Đăng ký trực trước</strong> để đăng ký ca trong tháng, sau đó quay lại
