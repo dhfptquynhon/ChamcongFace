@@ -1968,8 +1968,6 @@ const [statsYear, setStatsYear] = useState(today.getFullYear());
   const [registeredUsers, setRegisteredUsers] = useState([]);
   const [loadingRegisteredUsers, setLoadingRegisteredUsers] = useState(false);
   const [userDetailDialog, setUserDetailDialog] = useState({ open: false, user: null, schedule: [] });
-  const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState(today.getFullYear());
 
   // State cho yêu cầu điều chỉnh giờ
   const [timeAdjustmentRequests, setTimeAdjustmentRequests] = useState([]);
@@ -2332,7 +2330,7 @@ const loadEmployeesWithStats = async () => {
     
     try {
       const response = await axios.get(
-        `/api/attendance/admin/employee/${userId}/detail?month=${selectedMonth}&year=${selectedYear}`,
+        `/api/attendance/admin/employee/${userId}/detail?month=${statsMonth}&year=${statsYear}`,
         { headers: { Authorization: `Bearer ${auth.token}` } }
       );
       
@@ -3367,7 +3365,7 @@ const handleTabChange = (event, newValue) => {
         </DialogTitle>
         <DialogContent sx={{ py: 1.5 }}>
           <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ fontSize: '0.95rem' }}>
-            Lịch sử chấm công tháng {selectedMonth}/{selectedYear}
+            Lịch sử chấm công tháng {statsMonth}/{statsYear}
           </Typography>
           
           {userDetailDialog.schedule.length === 0 ? (
