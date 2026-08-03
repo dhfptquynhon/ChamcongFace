@@ -3930,21 +3930,32 @@ router.post('/schedule/:id/checkin', auth, async (req, res) => {
       const endTime = new Date(recordDateTime);
       const [endHours, endMinutes] = shiftEnd.split(':').map(Number);
       endTime.setHours(endHours, endMinutes, 0);
-      
+
       // Thời gian cho phép = thời gian kết thúc ca + 25 giờ (24h + 1h buffer)
       const allowedUntil = new Date(endTime.getTime() + (25 * 60 * 60 * 1000));
-      
+
       if (now > allowedUntil) {
-        return res.status(400).json({ 
-          message: 'Đã quá thời gian cho phép check-in (quá 24 giờ sau khi ca kết thúc)' 
+        return res.status(400).json({
+          message: `Đã quá thời gian cho phép check-in trực tiếp (quá 24 giờ sau khi ca kết thúc). Bạn có thể gửi yêu cầu điều chỉnh giờ để admin duyệt.`,
+          canRequestAdjustment: true,
+          loai_yeu_cau: 'checkin',
+          shiftEnd: shiftEnd,
+          daysLate: 1
         });
       }
     }
-    
-    // Nếu là ngày trước hôm qua (2+ ngày trước)
+
+    // Nếu quên check-in đã nhiều ngày (2+ ngày trước): không chặn hẳn nữa, cho phép gửi
+    // yêu cầu điều chỉnh giờ để admin duyệt bổ sung, giống như luồng check-out ca quá khứ.
     if (recordDate < yesterdayStr) {
-      return res.status(400).json({ 
-        message: 'Không thể check-in cho ca đã qua 2 ngày trở lên' 
+      const diffTime = Math.abs(now - new Date(recordDate));
+      const daysLate = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      return res.status(400).json({
+        message: `Ca này đã qua ${daysLate} ngày. Vui lòng gửi yêu cầu điều chỉnh giờ check-in để admin duyệt.`,
+        canRequestAdjustment: true,
+        loai_yeu_cau: 'checkin',
+        shiftEnd: shiftEnd,
+        daysLate: daysLate
       });
     }
 
