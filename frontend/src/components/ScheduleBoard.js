@@ -408,8 +408,9 @@ const canCheckIn = (cell) => {
     if (now > allowedUntil) {
       return {
         canCheckIn: false,
-        canRequestAdjustment: false,
-        reason: 'Đã quá thời gian cho phép check‑in (quá 24 giờ sau khi ca kết thúc)'
+        canRequestAdjustment: true,
+        loai_yeu_cau: 'checkin',
+        reason: `Đã quá 24 giờ sau khi ca kết thúc, bạn có thể gửi yêu cầu điều chỉnh giờ check‑in`
       };
     }
     return {
@@ -419,13 +420,14 @@ const canCheckIn = (cell) => {
       reason: `Ca của ngày hôm qua, bạn có thể gửi yêu cầu điều chỉnh giờ check‑in`
     };
   }
-  
-  // Ngày cũ hơn 2 ngày
+
+  // Ngày cũ hơn 2 ngày - vẫn cho gửi yêu cầu điều chỉnh giờ check-in để admin duyệt
   if (recordDate < yesterdayStr) {
     return {
       canCheckIn: false,
-      canRequestAdjustment: false,
-      reason: 'Không thể check‑in cho ca đã qua 2 ngày trở lên'
+      canRequestAdjustment: true,
+      loai_yeu_cau: 'checkin',
+      reason: 'Ca này đã qua nhiều ngày, bạn có thể gửi yêu cầu điều chỉnh giờ check‑in'
     };
   }
   
@@ -3126,16 +3128,22 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                   <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
                     {/* Nút Check-in khi registered */}
                     {detailDialog.userCell.trang_thai === 'registered' && (
-                      <Button
-                        variant="contained"
-                        color="primary"
-                        startIcon={<LoginIcon />}
-                        onClick={() => handleCheckin(detailDialog.userCell)}
-                        disabled={loading || !canCheckIn(detailDialog.userCell).canCheckIn}
-                        fullWidth
-                      >
-                        Check-in
-                      </Button>
+                      (() => {
+                        const checkinResult = canCheckIn(detailDialog.userCell);
+                        const isDisabled = loading || (!checkinResult.canCheckIn && !checkinResult.canRequestAdjustment);
+                        return (
+                          <Button
+                            variant="contained"
+                            color={checkinResult.canRequestAdjustment ? "warning" : "primary"}
+                            startIcon={checkinResult.canRequestAdjustment ? <AccessTimeIcon /> : <LoginIcon />}
+                            onClick={() => handleCheckin(detailDialog.userCell)}
+                            disabled={isDisabled}
+                            fullWidth
+                          >
+                            {checkinResult.canRequestAdjustment ? 'Gửi yêu cầu check-in' : 'Check-in'}
+                          </Button>
+                        );
+                      })()
                     )}
 
                     {/* Nút Check-out khi checked_in */}
@@ -4175,26 +4183,32 @@ const [trucThayDialog, setTrucThayDialog] = useState({
         )}
 
         {contextMenu?.cell?.trang_thai === 'registered' && (
-          <MenuItem 
-            onClick={() => {
-              handleCheckin(contextMenu.cell);
-              closeContextMenu();
-            }}
-            sx={{ 
-              color: '#d84315', 
-              fontSize: '0.8rem', 
-              py: 0.75,
-            }}
-            disabled={!canCheckIn(contextMenu.cell).canCheckIn}
-          >
-            🔔 Check-in
-            {!canCheckIn(contextMenu.cell).canCheckIn && (
-              <Typography variant="caption" color="text.secondary" sx={{ ml: 1, fontSize: '0.65rem' }}>
-                ({canCheckIn(contextMenu.cell).reason?.includes('Chưa tới ngày') ? 'Chưa tới ngày' : 
-                  canCheckIn(contextMenu.cell).reason?.includes('Chưa tới giờ') ? 'Chưa tới giờ' : 'Quá giờ'})
-              </Typography>
-            )}
-          </MenuItem>
+          (() => {
+            const checkinResult = canCheckIn(contextMenu.cell);
+            const isDisabled = !checkinResult.canCheckIn && !checkinResult.canRequestAdjustment;
+            return (
+              <MenuItem
+                onClick={() => {
+                  handleCheckin(contextMenu.cell);
+                  closeContextMenu();
+                }}
+                sx={{
+                  color: checkinResult.canRequestAdjustment ? '#ed6c02' : '#d84315',
+                  fontSize: '0.8rem',
+                  py: 0.75,
+                }}
+                disabled={isDisabled}
+              >
+                {checkinResult.canRequestAdjustment ? '⏰ Gửi yêu cầu check-in' : '🔔 Check-in'}
+                {!checkinResult.canCheckIn && !checkinResult.canRequestAdjustment && (
+                  <Typography variant="caption" color="text.secondary" sx={{ ml: 1, fontSize: '0.65rem' }}>
+                    ({checkinResult.reason?.includes('Chưa tới ngày') ? 'Chưa tới ngày' :
+                      checkinResult.reason?.includes('Chưa tới giờ') ? 'Chưa tới giờ' : 'Quá giờ'})
+                  </Typography>
+                )}
+              </MenuItem>
+            );
+          })()
         )}
         
         {contextMenu?.cell?.trang_thai === 'checked_in' && (
