@@ -90,7 +90,9 @@ const AdminDashboard = () => {
     schedule: [],
     attendance: [],
     monthlyStats: null,
-    trucThayRecords: []
+    trucThayRecords: [],
+    month: new Date().getMonth() + 1,
+    year: new Date().getFullYear()
   });
   
   // State cho báo cáo
@@ -286,19 +288,24 @@ const AdminDashboard = () => {
   // ======================
   // 6. LẤY CHI TIẾT NHÂN VIÊN
   // ======================
-  const fetchEmployeeDetail = async (employeeId) => {
+  const fetchEmployeeDetail = async (employeeId, month, year) => {
     if (!auth?.token || !employeeId) return;
-    
+
+    // Cho phép xem chi tiết theo tháng bất kỳ: nếu không truyền tháng/năm cụ thể,
+    // giữ nguyên tháng/năm đang xem trong dialog (nếu đang mở cho cùng nhân viên) hoặc dùng tháng hiện tại.
+    const targetMonth = month || (employeeDetail.employee?.id === employeeId ? employeeDetail.month : new Date().getMonth() + 1);
+    const targetYear = year || (employeeDetail.employee?.id === employeeId ? employeeDetail.year : new Date().getFullYear());
+
     setLoading(true);
     try {
       const [scheduleRes, attendanceRes, statsRes, trucThayRes] = await Promise.all([
-        axios.get(`/api/attendance/admin/employee/${employeeId}/schedule?month=${reportDate.month}&year=${reportDate.year}`, {
+        axios.get(`/api/attendance/admin/employee/${employeeId}/schedule?month=${targetMonth}&year=${targetYear}`, {
           headers: { Authorization: `Bearer ${auth.token}` }
         }),
-        axios.get(`/api/attendance/admin/employee/${employeeId}/attendance?month=${reportDate.month}&year=${reportDate.year}`, {
+        axios.get(`/api/attendance/admin/employee/${employeeId}/attendance?month=${targetMonth}&year=${targetYear}`, {
           headers: { Authorization: `Bearer ${auth.token}` }
         }),
-        axios.get(`/api/attendance/admin/employee/${employeeId}/monthly-stats?month=${reportDate.month}&year=${reportDate.year}`, {
+        axios.get(`/api/attendance/admin/employee/${employeeId}/monthly-stats?month=${targetMonth}&year=${targetYear}`, {
           headers: { Authorization: `Bearer ${auth.token}` }
         }),
         axios.get(`/api/attendance/admin/employee/${employeeId}/tructhay`, {
@@ -312,7 +319,9 @@ const AdminDashboard = () => {
         schedule: scheduleRes.data,
         attendance: attendanceRes.data,
         monthlyStats: statsRes.data,
-        trucThayRecords: trucThayRes.data
+        trucThayRecords: trucThayRes.data,
+        month: targetMonth,
+        year: targetYear
       });
     } catch (err) {
       setError(err.response?.data?.message || 'Không thể tải chi tiết nhân viên');
@@ -1141,7 +1150,7 @@ const AdminDashboard = () => {
                             onClick={() => {
                               const employee = employees.find(e => e.ma_nhan_vien === emp.ma_nhan_vien);
                               if (employee) {
-                                fetchEmployeeDetail(employee.id);
+                                fetchEmployeeDetail(employee.id, reportDate.month, reportDate.year);
                               }
                             }}
                           >
@@ -1514,14 +1523,43 @@ const AdminDashboard = () => {
         sx={{ maxHeight: '80vh' }}
       >
         <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <PersonIcon />
-            <Typography variant="h6">
-              Chi tiết chấm công: {employeeDetail.employee?.ten_nhan_vien}
-            </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <PersonIcon />
+              <Typography variant="h6">
+                Chi tiết chấm công: {employeeDetail.employee?.ten_nhan_vien}
+              </Typography>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <FormControl size="small" sx={{ minWidth: 110 }}>
+                <InputLabel>Tháng</InputLabel>
+                <Select
+                  value={employeeDetail.month}
+                  label="Tháng"
+                  onChange={(e) => fetchEmployeeDetail(employeeDetail.employee?.id, Number(e.target.value), employeeDetail.year)}
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                    <MenuItem key={m} value={m}>Tháng {m}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl size="small" sx={{ minWidth: 100 }}>
+                <InputLabel>Năm</InputLabel>
+                <Select
+                  value={employeeDetail.year}
+                  label="Năm"
+                  onChange={(e) => fetchEmployeeDetail(employeeDetail.employee?.id, employeeDetail.month, Number(e.target.value))}
+                >
+                  {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map((y) => (
+                    <MenuItem key={y} value={y}>{y}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
           </Box>
         </DialogTitle>
-        
+
         <DialogContent>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 5 }}>
@@ -1568,7 +1606,7 @@ const AdminDashboard = () => {
               {employeeDetail.monthlyStats && (
                 <Paper sx={{ p: 2, mb: 3 }}>
                   <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-                    📊 Thống kê tháng {reportDate.month}/{reportDate.year}
+                    📊 Thống kê tháng {employeeDetail.month}/{employeeDetail.year}
                   </Typography>
                   <Grid container spacing={2}>
                     <Grid item xs={6} md={3}>
