@@ -356,6 +356,41 @@ router.put('/admin/employees/:id', auth, requireAdmin, async (req, res) => {
 });
 
 // ======================
+// ADMIN API: BẬT/TẮT (VÔ HIỆU HÓA) TÀI KHOẢN NHÂN VIÊN
+// Nhân viên bị vô hiệu hóa không thể đăng nhập / đăng ký ca / check-in / check-out nữa,
+// nhưng dữ liệu chấm công cũ vẫn được giữ nguyên để xem lại khi cần.
+// ======================
+router.put('/admin/employees/:id/active', auth, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { is_active } = req.body;
+
+  try {
+    if (req.employee.id === parseInt(id)) {
+      return res.status(400).json({ message: 'Không thể tự vô hiệu hóa tài khoản của chính bạn' });
+    }
+
+    const [rows] = await db.query('SELECT is_admin FROM nhanvien WHERE id = ?', [id]);
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy nhân viên' });
+    }
+    if (rows[0].is_admin && !is_active) {
+      return res.status(400).json({ message: 'Không thể vô hiệu hóa tài khoản quản trị viên' });
+    }
+
+    await db.query('UPDATE nhanvien SET is_active = ? WHERE id = ?', [is_active ? 1 : 0, id]);
+
+    res.json({
+      success: true,
+      message: is_active ? 'Đã kích hoạt lại tài khoản' : 'Đã vô hiệu hóa tài khoản',
+      is_active: is_active ? 1 : 0
+    });
+  } catch (error) {
+    console.error('Lỗi cập nhật trạng thái nhân viên:', error);
+    res.status(500).json({ message: 'Lỗi server' });
+  }
+});
+
+// ======================
 // ADMIN API: XÓA NHÂN VIÊN
 // ======================
 router.delete('/admin/employees/:id', auth, requireAdmin, async (req, res) => {
@@ -4794,7 +4829,7 @@ router.post('/login-face', async (req, res) => {
     console.log('✅ Descriptor extracted, length:', descriptor.length);
 
     const [rows] = await db.query(
-      `SELECT id, ma_nhan_vien, ten_nhan_vien, face_embedding, is_admin, 
+      `SELECT id, ma_nhan_vien, ten_nhan_vien, face_embedding, is_admin, is_active,
               face_login_enabled, face_code, face_code_enabled
        FROM nhanvien WHERE face_embedding IS NOT NULL`
     );
@@ -4835,6 +4870,9 @@ router.post('/login-face', async (req, res) => {
 
     console.log(`🏆 Best score: ${bestScore.toFixed(4)}, match: ${bestMatch ? bestMatch.ma_nhan_vien : 'none'}`);
     if (bestMatch && bestScore > 0.75) { // Tạm hạ ngưỡng xuống 0.75 để test
+      if (bestMatch.is_active === 0) {
+        return res.status(403).json({ success: false, message: 'Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ quản trị viên.' });
+      }
       if (!bestMatch.face_login_enabled) {
         return res.status(403).json({ success: false, message: 'Tính năng đăng nhập bằng khuôn mặt đã bị vô hiệu hóa.' });
       }
@@ -4881,7 +4919,7 @@ router.post('/login-face-verify', async (req, res) => {
     }
 
     const [rows] = await db.query(
-      `SELECT id, ma_nhan_vien, ten_nhan_vien, is_admin, face_code, face_code_enabled 
+      `SELECT id, ma_nhan_vien, ten_nhan_vien, is_admin, is_active, face_code, face_code_enabled
        FROM nhanvien WHERE id = ?`,
       [userId]
     );
@@ -4889,6 +4927,10 @@ router.post('/login-face-verify', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Người dùng không tồn tại' });
     }
     const user = rows[0];
+
+    if (user.is_active === 0) {
+      return res.status(403).json({ success: false, message: 'Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ quản trị viên.' });
+    }
 
     if (!user.face_code_enabled || !user.face_code) {
       return res.status(400).json({ success: false, message: 'Mã xác thực không được yêu cầu' });

@@ -1804,7 +1804,10 @@ const EmployeeList = ({
   onSelectAll,
   searchTerm,
   onSearchChange,
-  loading
+  loading,
+  showInactive,
+  onToggleShowInactive,
+  inactiveCount
 }) => {
   const filteredEmployees = employees.filter(emp => 
     emp.ten_nhan_vien.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1874,8 +1877,27 @@ const EmployeeList = ({
             </Typography>
           }
         />
+
+        {inactiveCount > 0 && (
+          <FormControlLabel
+            sx={{ display: 'block', mt: 0.5 }}
+            control={
+              <Checkbox
+                size="small"
+                checked={showInactive}
+                onChange={onToggleShowInactive}
+                sx={{ color: '#757575', '& .MuiSvgIcon-root': { fontSize: '1.1rem' } }}
+              />
+            }
+            label={
+              <Typography variant="caption" color="text.secondary">
+                Hiện cả nhân viên đã nghỉ việc ({inactiveCount})
+              </Typography>
+            }
+          />
+        )}
       </Box>
-      
+
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
           <CircularProgress size={28} />
@@ -1908,14 +1930,21 @@ const EmployeeList = ({
                     <Typography variant="caption" sx={{ color: '#1976d2', fontWeight: 'bold', fontSize: '0.7rem' }}>
                       ({getEmployeeAbbr(emp)})
                     </Typography>
+                    {emp.is_active === 0 && (
+                      <Chip
+                        label="Đã nghỉ"
+                        size="small"
+                        sx={{ height: 16, fontSize: '0.62rem', bgcolor: '#eeeeee', color: '#757575', '& .MuiChip-label': { px: 0.6 } }}
+                      />
+                    )}
                   </Box>
-                  <Chip 
+                  <Chip
                     label={emp.ma_nhan_vien}
                     size="small"
                     variant="outlined"
-                    sx={{ 
-                      height: 18, 
-                      fontSize: '0.65rem', 
+                    sx={{
+                      height: 18,
+                      fontSize: '0.65rem',
                       width: 'fit-content',
                       mt: 0.5,
                       '& .MuiChip-label': { px: 0.8 }
@@ -1951,6 +1980,9 @@ const AdminHistory = () => {
   const [year, setYear] = useState(today.getFullYear());
   const [employees, setEmployees] = useState([]);
   const [selectedEmployees, setSelectedEmployees] = useState([]);
+  // Danh sách gốc (chưa lọc theo trạng thái nghỉ việc) + cờ hiện cả nhân viên đã nghỉ
+  const [allFetchedEmployees, setAllFetchedEmployees] = useState([]);
+  const [showInactiveEmployees, setShowInactiveEmployees] = useState(false);
   const [allAttendanceData, setAllAttendanceData] = useState({});
   const [loading, setLoading] = useState(false);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
@@ -2263,21 +2295,31 @@ useEffect(() => {
 // Lấy danh sách nhân viên gốc (không thống kê theo tháng) cho Tab 1
 const fetchEmployees = async () => {
   if (!auth?.token || !auth?.employee?.is_admin) return;
-  
+
   setLoadingEmployees(true);
   try {
     const response = await axios.get('/api/attendance/admin/employees', {
       headers: { Authorization: `Bearer ${auth.token}` }
     });
     const nonAdminEmployees = (response.data || []).filter(emp => !emp.is_admin);
-    setEmployees(nonAdminEmployees);
-    setSelectedEmployees(nonAdminEmployees.map(emp => emp.id));
+    setAllFetchedEmployees(nonAdminEmployees);
   } catch (err) {
     setError('Không thể tải danh sách nhân viên: ' + (err.response?.data?.message || err.message));
   } finally {
     setLoadingEmployees(false);
   }
 };
+
+// Nhân viên đã nghỉ việc (is_active = 0) mặc định bị ẩn khỏi danh sách chọn để xuất bảng công,
+// nhưng vẫn có thể bật lại để xem/xuất lịch sử tháng cũ của họ khi cần.
+useEffect(() => {
+  const visible = showInactiveEmployees
+    ? allFetchedEmployees
+    : allFetchedEmployees.filter(emp => emp.is_active !== 0);
+  setEmployees(visible);
+  setSelectedEmployees(visible.map(emp => emp.id));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [allFetchedEmployees, showInactiveEmployees]);
 
 // Lấy danh sách nhân viên kèm thống kê theo tháng (cho Tab 2)
 const loadEmployeesWithStats = async () => {
@@ -2905,6 +2947,9 @@ const handleTabChange = (event, newValue) => {
               searchTerm={searchTerm}
               onSearchChange={setSearchTerm}
               loading={loadingEmployees}
+              showInactive={showInactiveEmployees}
+              onToggleShowInactive={(e) => setShowInactiveEmployees(e.target.checked)}
+              inactiveCount={allFetchedEmployees.filter(emp => emp.is_active === 0).length}
             />
           </Grid>
 

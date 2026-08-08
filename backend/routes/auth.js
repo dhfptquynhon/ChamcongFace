@@ -52,9 +52,16 @@ router.post('/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, employee.password);
 
         if (!isMatch) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Mã nhân viên hoặc mật khẩu không đúng' 
+            return res.status(401).json({
+                success: false,
+                message: 'Mã nhân viên hoặc mật khẩu không đúng'
+            });
+        }
+
+        if (employee.is_active === 0) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ quản trị viên.'
             });
         }
 

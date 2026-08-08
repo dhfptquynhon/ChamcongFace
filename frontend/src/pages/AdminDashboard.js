@@ -53,6 +53,7 @@ import {
   AdminPanelSettings as AdminPanelSettingsIcon,
   Work as WorkIcon,
   CheckCircle as CheckCircleIcon,
+  Block as BlockIcon,
   Schedule as ScheduleIcon,
   Today as TodayIcon,
   TrendingUp as TrendingUpIcon,
@@ -468,6 +469,33 @@ const AdminDashboard = () => {
   };
 
   // ======================
+  // 10b. BẬT/TẮT (VÔ HIỆU HÓA) TÀI KHOẢN NHÂN VIÊN
+  // ======================
+  const handleToggleActive = async (employee) => {
+    const willActivate = employee.is_active === 0;
+    const confirmMsg = willActivate
+      ? `Kích hoạt lại tài khoản của ${employee.ten_nhan_vien}?`
+      : `Vô hiệu hóa tài khoản của ${employee.ten_nhan_vien}? Người này sẽ không thể đăng nhập, đăng ký ca, check-in/check-out nữa. Dữ liệu chấm công cũ vẫn được giữ nguyên.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      setLoading(true);
+      await axios.put(
+        `/api/attendance/admin/employees/${employee.id}/active`,
+        { is_active: willActivate },
+        { headers: { Authorization: `Bearer ${auth.token}` } }
+      );
+      await fetchAllEmployees();
+    } catch (err) {
+      const errorMsg = err.response?.data?.message || 'Không thể cập nhật trạng thái nhân viên';
+      setError(errorMsg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ======================
   // 11. DUYỆT TRỰC THAY
   // ======================
   const handleApproveTrucThay = async (trucThayId, approve) => {
@@ -776,6 +804,7 @@ const AdminDashboard = () => {
                     <TableCell sx={{ fontWeight: 'bold' }}>Mã NV</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>Tên nhân viên</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>Vai trò</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Trạng thái</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>Ngày tạo</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>Số ca đăng ký</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>Tổng giờ làm</TableCell>
@@ -809,11 +838,19 @@ const AdminDashboard = () => {
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        <Chip 
+                        <Chip
                           label={employee.is_admin ? "Quản trị viên" : "Nhân viên"}
                           color={employee.is_admin ? "error" : "default"}
                           size="small"
                           icon={employee.is_admin ? <AdminPanelSettingsIcon /> : <PersonIcon />}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={employee.is_active === 0 ? "Đã nghỉ" : "Đang làm"}
+                          color={employee.is_active === 0 ? "default" : "success"}
+                          size="small"
+                          variant={employee.is_active === 0 ? "outlined" : "filled"}
                         />
                       </TableCell>
                       <TableCell>
@@ -866,6 +903,22 @@ const AdminDashboard = () => {
                             </IconButton>
                           </Tooltip>
                           
+                          <Tooltip title={employee.is_active === 0 ? "Kích hoạt lại" : "Vô hiệu hóa (nghỉ việc)"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                color={employee.is_active === 0 ? "success" : "default"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleActive(employee);
+                                }}
+                                disabled={employee.id === auth.employee.id || employee.is_admin}
+                              >
+                                {employee.is_active === 0 ? <CheckCircleIcon fontSize="small" /> : <BlockIcon fontSize="small" />}
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+
                           <Tooltip title="Xóa nhân viên">
                             <IconButton
                               size="small"

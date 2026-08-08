@@ -67,19 +67,28 @@ const auth = async (req, res, next) => {
 
     // 6. Query database để lấy thông tin nhân viên đầy đủ
     const [employees] = await db.query(
-      'SELECT id, ma_nhan_vien, ten_nhan_vien, is_admin FROM nhanvien WHERE ma_nhan_vien = ?',
+      'SELECT id, ma_nhan_vien, ten_nhan_vien, is_admin, is_active FROM nhanvien WHERE ma_nhan_vien = ?',
       [decoded.ma_nhan_vien]
     );
 
     // 7. Kiểm tra nhân viên có tồn tại trong database không
     if (!employees || employees.length === 0) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        message: 'Tài khoản không tồn tại trong hệ thống.' 
+        message: 'Tài khoản không tồn tại trong hệ thống.'
       });
     }
 
     const employee = employees[0];
+
+    // 7b. Tài khoản đã bị vô hiệu hóa (nhân viên nghỉ việc) - chặn mọi hành động,
+    // kể cả khi token cũ vẫn còn hạn.
+    if (employee.is_active === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ quản trị viên.'
+      });
+    }
 
     // 8. Gán thông tin nhân viên vào req.employee để sử dụng ở các route tiếp theo
     req.employee = {
