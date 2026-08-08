@@ -65,6 +65,7 @@ import {
   ChevronRight as ChevronRightIcon,
   Warning as WarningIcon,
   CheckCircle as CheckCircleIcon,
+  Block as BlockIcon,
   Cancel as CancelIcon,
   Pending as PendingIcon,
   History as HistoryIcon,
@@ -2713,6 +2714,33 @@ const loadEmployeesWithStats = async () => {
     }
   };
 
+  // Bật/tắt (vô hiệu hóa) tài khoản nhân viên - người bị vô hiệu hóa không đăng nhập,
+  // đăng ký ca, check-in/check-out được nữa, nhưng lịch sử chấm công vẫn giữ nguyên.
+  const handleToggleActive = async (employee) => {
+    const willActivate = employee.is_active === 0;
+    const confirmMsg = willActivate
+      ? `Kích hoạt lại tài khoản của ${employee.ten_nhan_vien}?`
+      : `Vô hiệu hóa tài khoản của ${employee.ten_nhan_vien}? Người này sẽ không thể đăng nhập, đăng ký ca, check-in/check-out nữa. Dữ liệu chấm công cũ vẫn được giữ nguyên.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      setLoadingEmployees(true);
+      await axios.put(
+        `/api/attendance/admin/employees/${employee.id}/active`,
+        { is_active: willActivate },
+        { headers: { Authorization: `Bearer ${auth.token}` } }
+      );
+      await loadEmployeesWithStats();
+      showSnackbar(willActivate ? 'Đã kích hoạt lại tài khoản' : 'Đã vô hiệu hóa tài khoản', 'success');
+    } catch (err) {
+      const errorMsg = err.response?.data?.message || 'Không thể cập nhật trạng thái nhân viên';
+      showSnackbar(errorMsg, 'error');
+    } finally {
+      setLoadingEmployees(false);
+    }
+  };
+
   const openResetPasswordDialog = (employee) => {
     setResetPasswordDialog({
       open: true,
@@ -3187,6 +3215,7 @@ const handleTabChange = (event, newValue) => {
         <TableCell align="center" sx={{ color: 'white', fontWeight: 'bold' }}>Số ca hoàn thành</TableCell>
         <TableCell align="center" sx={{ color: 'white', fontWeight: 'bold' }}>Tổng giờ làm</TableCell>
         <TableCell align="center" sx={{ color: 'white', fontWeight: 'bold' }}>Face Login</TableCell>
+        <TableCell align="center" sx={{ color: 'white', fontWeight: 'bold' }}>Trạng thái</TableCell>
         <TableCell align="center" sx={{ color: 'white', fontWeight: 'bold' }}>Hành động</TableCell>
       </TableRow>
     </TableHead>
@@ -3200,10 +3229,19 @@ const handleTabChange = (event, newValue) => {
           <TableCell align="center">{user.total_completed_shifts || 0}</TableCell>
           <TableCell align="center">{((Number(user.total_work_hours) || 0)).toFixed(1)}h</TableCell>
           <TableCell align="center">
-            <Chip 
+            <Chip
               label={user.face_login_enabled ? "Bật" : "Tắt"}
               size="small"
               color={user.face_login_enabled ? "success" : "default"}
+              sx={{ height: 20, fontSize: '0.7rem' }}
+            />
+          </TableCell>
+          <TableCell align="center">
+            <Chip
+              label={user.is_active === 0 ? "Đã nghỉ" : "Đang làm"}
+              size="small"
+              color={user.is_active === 0 ? "default" : "success"}
+              variant={user.is_active === 0 ? "outlined" : "filled"}
               sx={{ height: 20, fontSize: '0.7rem' }}
             />
           </TableCell>
@@ -3223,6 +3261,17 @@ const handleTabChange = (event, newValue) => {
                 <SettingsIcon />
               </IconButton>
             </Tooltip>
+            <Tooltip title={user.is_active === 0 ? "Kích hoạt lại" : "Vô hiệu hóa (nghỉ việc)"}>
+              <span>
+                <IconButton
+                  color={user.is_active === 0 ? "success" : "default"}
+                  onClick={() => handleToggleActive(user)}
+                  disabled={user.id === auth.employee.id || user.is_admin}
+                >
+                  {user.is_active === 0 ? <CheckCircleIcon /> : <BlockIcon />}
+                </IconButton>
+              </span>
+            </Tooltip>
             <Tooltip title="Xóa nhân viên">
               <IconButton color="error" onClick={() => handleDeleteEmployee(user.id)} disabled={user.id === auth.employee.id}>
                 <DeleteIcon />
@@ -3233,7 +3282,7 @@ const handleTabChange = (event, newValue) => {
       ))}
       {employees.length === 0 && (
         <TableRow>
-          <TableCell colSpan={8} align="center">
+          <TableCell colSpan={9} align="center">
             <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
               Chưa có nhân viên nào trong hệ thống
             </Typography>
