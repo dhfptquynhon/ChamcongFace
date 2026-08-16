@@ -2300,7 +2300,7 @@ router.get('/truc-thay/my-shifts', auth, async (req, res) => {
       INNER JOIN truc_thay tt ON lt.id = tt.lich_truc_ao_id
       INNER JOIN nhanvien nv_original ON tt.nguoi_dang_ky_id = nv_original.id
       WHERE tt.nguoi_thuc_hien_id = ?
-        AND tt.trang_thai IN ('active', 'pending')
+        AND tt.trang_thai IN ('active', 'pending', 'completed')
       ORDER BY lt.ngay DESC, lt.ca ASC`,
       [employee_id]
     );
