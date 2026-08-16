@@ -2324,6 +2324,22 @@ const [trucThayDialog, setTrucThayDialog] = useState({
     return Object.values(map).sort((a, b) => b.hours - a.hours);
   }, [myTrucThayShifts, month, year]);
 
+  // Bảng ca của tôi được người khác trực thay trong tháng đang xem: tổng số giờ từng người đã
+  // làm thay cho mình, để mình thanh toán lại cho họ (giờ này đã cộng vào bảng công của chính mình).
+  const myReceivedTrucThayLedger = useMemo(() => {
+    const map = {};
+    myReceivedTrucThayShifts.forEach((shift) => {
+      if (shift.trang_thai !== 'checked_out') return;
+      const d = new Date(shift.ngay);
+      if (d.getMonth() + 1 !== month || d.getFullYear() !== year) return;
+      const key = shift.ma_nguoi_truc_thay || shift.ten_nguoi_truc_thay;
+      if (!map[key]) map[key] = { name: shift.ten_nguoi_truc_thay, hours: 0, count: 0 };
+      map[key].hours += Number(shift.thoi_gian_lam) || 0;
+      map[key].count += 1;
+    });
+    return Object.values(map).sort((a, b) => b.hours - a.hours);
+  }, [myReceivedTrucThayShifts, month, year]);
+
   return (
     <Box sx={{
       display: 'flex',
@@ -2958,6 +2974,44 @@ const [trucThayDialog, setTrucThayDialog] = useState({
               )}
 
               <Divider sx={{ my: 2 }} />
+
+              {myReceivedTrucThayLedger.length > 0 && (
+                <Box
+                  sx={{
+                    mb: 2,
+                    p: 1.5,
+                    borderRadius: 1.5,
+                    border: '1px solid #c8e6c9',
+                    backgroundColor: '#f1f8f2'
+                  }}
+                >
+                  <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1 }}>
+                    🧾 Bảng người khác trực thay cho bạn tháng {month}/{year} - bạn cần thanh toán lại
+                  </Typography>
+                  <Stack spacing={0.75}>
+                    {myReceivedTrucThayLedger.map((row) => (
+                      <Box
+                        key={row.name}
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        <Typography variant="body2">
+                          <strong>{row.name}</strong> đã trực thay cho bạn ({row.count} ca)
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={`${row.hours.toFixed(2)}h ≈ ${(row.hours * 22000).toLocaleString('vi-VN')}đ`}
+                          sx={{ bgcolor: '#4caf50', color: 'white', fontWeight: 'bold' }}
+                        />
+                      </Box>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
 
               <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1 }}>
                 🙌 Ca của bạn được người khác trực thay ({myReceivedTrucThayShifts.length})
