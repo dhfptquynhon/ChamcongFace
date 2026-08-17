@@ -3907,6 +3907,20 @@ router.post('/schedule/:id/checkin', auth, async (req, res) => {
       return res.status(400).json({ message: 'Bạn đã check-in rồi' });
     }
 
+    // KIỂM TRA ĐÃ CÓ NGƯỜI TRỰC THAY: nếu ca này đang được người khác trực thay (đã duyệt),
+    // chỉ người trực thay mới được check-in ca này, không phải người đăng ký gốc.
+    const [activeSubIn] = await db.query(
+      `SELECT nv.ten_nhan_vien AS performer_name
+       FROM truc_thay tt JOIN nhanvien nv ON tt.nguoi_thuc_hien_id = nv.id
+       WHERE tt.lich_truc_goc_id = ? AND tt.trang_thai = 'active'`,
+      [id]
+    );
+    if (activeSubIn.length > 0) {
+      return res.status(400).json({
+        message: `Ca này đã được ${activeSubIn[0].performer_name} trực thay, bạn không thể tự check-in. Chỉ ${activeSubIn[0].performer_name} mới có thể check-in ca này. Khi họ hủy trực thay, bạn mới check-in được.`
+      });
+    }
+
     // KIỂM TRA GIỚI HẠN 91H/THÁNG: đã đạt tối đa thì không được check-in nữa
     const capDate = new Date(record.ngay);
     const capHours = await getMonthlyHours(ma_nhan_vien, capDate.getMonth() + 1, capDate.getFullYear());
@@ -4041,6 +4055,20 @@ router.post('/schedule/:id/checkout', auth, async (req, res) => {
     
     if (record.trang_thai !== 'checked_in') {
       return res.status(400).json({ message: 'Bạn cần check-in trước khi check-out' });
+    }
+
+    // KIỂM TRA ĐÃ CÓ NGƯỜI TRỰC THAY: nếu ca này đang được người khác trực thay (đã duyệt),
+    // chỉ người trực thay mới được check-out ca này, không phải người đăng ký gốc.
+    const [activeSubOut] = await db.query(
+      `SELECT nv.ten_nhan_vien AS performer_name
+       FROM truc_thay tt JOIN nhanvien nv ON tt.nguoi_thuc_hien_id = nv.id
+       WHERE tt.lich_truc_goc_id = ? AND tt.trang_thai = 'active'`,
+      [id]
+    );
+    if (activeSubOut.length > 0) {
+      return res.status(400).json({
+        message: `Ca này đã được ${activeSubOut[0].performer_name} trực thay, bạn không thể tự check-out. Chỉ ${activeSubOut[0].performer_name} mới có thể check-out ca này.`
+      });
     }
 
     // KIỂM TRA GIỚI HẠN 91H/THÁNG: đã đạt tối đa thì không được check-out nữa
@@ -4613,6 +4641,20 @@ router.delete('/schedule/:id/cancel', auth, async (req, res) => {
     
     if (record.trang_thai !== 'registered') {
       return res.status(400).json({ message: 'Chỉ được hủy khi chưa check-in' });
+    }
+
+    // KIỂM TRA ĐÃ CÓ NGƯỜI TRỰC THAY: nếu ca này đang được người khác trực thay (đã duyệt),
+    // không cho hủy đăng ký - phải chờ người trực thay hủy trực thay trước.
+    const [activeSubCancel] = await db.query(
+      `SELECT nv.ten_nhan_vien AS performer_name
+       FROM truc_thay tt JOIN nhanvien nv ON tt.nguoi_thuc_hien_id = nv.id
+       WHERE tt.lich_truc_goc_id = ? AND tt.trang_thai = 'active'`,
+      [id]
+    );
+    if (activeSubCancel.length > 0) {
+      return res.status(400).json({
+        message: `Ca này đang được ${activeSubCancel[0].performer_name} trực thay, bạn không thể hủy đăng ký. Khi ${activeSubCancel[0].performer_name} hủy trực thay, bạn mới hủy đăng ký được.`
+      });
     }
 
     await db.query('START TRANSACTION');

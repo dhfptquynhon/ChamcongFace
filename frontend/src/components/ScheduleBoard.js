@@ -345,11 +345,19 @@ const canRegister = (date, shiftKey) => {
 // Hàm kiểm tra xem có thể check-in không (bao gồm kiểm tra chưa tới ngày và giờ)
 const canCheckIn = (cell) => {
   if (!cell) return { canCheckIn: false, reason: 'Không có thông tin ca' };
-  
+
+  // Ca đã có người khác trực thay (đã duyệt) - chỉ người trực thay mới được check-in
+  if (cell.truc_thay_type === 'receiver' && cell.trang_thai_truc_thay === 'active') {
+    return {
+      canCheckIn: false,
+      reason: `Ca này đã được ${cell.ten_nguoi_truc_thay || 'người khác'} trực thay, chỉ họ mới check-in được`
+    };
+  }
+
   const now = new Date();
   const currentTime = now.toTimeString().slice(0, 5);
   const currentDate = now.toISOString().split('T')[0];
-  
+
   const shift = SHIFTS.find(s => s.key === cell.ca);
   if (!shift) return { canCheckIn: false, reason: 'Ca không hợp lệ' };
   
@@ -437,7 +445,15 @@ const canCheckIn = (cell) => {
 // Hàm kiểm tra xem có thể check-out không (LUÔN CHO PHÉP GỬI YÊU CẦU CHO QUÁ KHỨ)
 const canCheckOut = (cell) => {
   if (!cell) return { canCheckOut: false, reason: 'Không có thông tin ca' };
-  
+
+  // Ca đã có người khác trực thay (đã duyệt) - chỉ người trực thay mới được check-out
+  if (cell.truc_thay_type === 'receiver' && cell.trang_thai_truc_thay === 'active') {
+    return {
+      canCheckOut: false,
+      reason: `Ca này đã được ${cell.ten_nguoi_truc_thay || 'người khác'} trực thay, chỉ họ mới check-out được`
+    };
+  }
+
   const now = new Date();
   const currentTime = now.toTimeString().slice(0, 5);
   const currentDate = now.toISOString().split('T')[0];
@@ -3220,8 +3236,10 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                       })()
                     )}
 
-                    {/* Nút Hủy đăng ký - chỉ hiển thị nếu là ca thường (không phải trực thay) và registered */}
-                    {detailDialog.userCell.trang_thai === 'registered' && !detailDialog.userCell.is_truc_thay && (
+                    {/* Nút Hủy đăng ký - chỉ hiển thị nếu là ca thường (không phải trực thay), registered,
+                        và chưa bị người khác trực thay (đã duyệt) */}
+                    {detailDialog.userCell.trang_thai === 'registered' && !detailDialog.userCell.is_truc_thay &&
+                      !(detailDialog.userCell.truc_thay_type === 'receiver' && detailDialog.userCell.trang_thai_truc_thay === 'active') && (
                       <Button
                         variant="outlined"
                         color="error"
@@ -3232,6 +3250,15 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                       >
                         Hủy đăng ký
                       </Button>
+                    )}
+
+                    {/* Thông báo khi ca đã có người khác trực thay: không thể tự hủy đăng ký */}
+                    {detailDialog.userCell.trang_thai === 'registered' && !detailDialog.userCell.is_truc_thay &&
+                      detailDialog.userCell.truc_thay_type === 'receiver' && detailDialog.userCell.trang_thai_truc_thay === 'active' && (
+                      <Alert severity="info" sx={{ width: '100%' }}>
+                        Ca này đã được <strong>{detailDialog.userCell.ten_nguoi_truc_thay}</strong> trực thay, bạn không thể tự hủy đăng ký.
+                        Khi họ hủy trực thay, bạn mới hủy đăng ký được.
+                      </Alert>
                     )}
 
                     {/* Nút Hủy trực thay - chỉ hiển thị nếu là ca trực thay và registered và có thể hủy */}
