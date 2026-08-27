@@ -1,4 +1,5 @@
 import React, { useState, useContext, useEffect, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -68,6 +69,7 @@ const formatTime = (t) => {
 
 const Attendance = ({ onChanged }) => {
   const { auth } = useContext(AuthContext);
+  const location = useLocation();
   const [shifts, setShifts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingActionId, setLoadingActionId] = useState(null);
@@ -89,7 +91,7 @@ const Attendance = ({ onChanged }) => {
 
   // Ngày đang xem: mặc định hôm nay, có thể lùi về các ngày trước để check-in/check-out
   // bù cho ca đã quên, hoặc gửi yêu cầu điều chỉnh giờ nếu đã quá hạn check-in trực tiếp.
-  const [viewDate, setViewDate] = useState(todayStr);
+  const [viewDate, setViewDate] = useState(location.state?.focusDate || todayStr);
   const isToday = viewDate === todayStr;
 
   const fetchTodayShifts = async (dateToFetch) => {

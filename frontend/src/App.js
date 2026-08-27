@@ -17,6 +17,7 @@ import AdminDashboard from './pages/AdminDashboard';
 
 // Components & Context
 import Navbar from './components/Navbar';
+import ForgottenCheckoutModal from './components/ForgottenCheckoutModal';
 import AuthContext from './context/AuthContext';
 
 // Context bật/tắt giao diện sáng - tối, dùng chung cho toàn bộ app (vd: nút trên Navbar)
@@ -267,7 +268,8 @@ function App() {
         <Router>
           {/* Chỉ hiển thị Navbar khi người dùng đã đăng nhập */}
           {auth && <Navbar />}
-          
+          {auth && <ForgottenCheckoutModal />}
+
           <Routes>
             {/* --- PUBLIC ROUTES (Chưa đăng nhập mới vào được) --- */}
             <Route 

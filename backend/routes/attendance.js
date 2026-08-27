@@ -3835,6 +3835,50 @@ router.get('/my/today-shifts', auth, async (req, res) => {
 });
 
 // ======================
+// API: Lấy các ca ĐÃ CHECK-IN NHƯNG CHƯA CHECK-OUT của tôi trong tháng (để nhắc quên check-out
+// ngay sau khi đăng nhập, quét cả tháng chứ không chỉ hôm nay). Loại trừ ca đã bị người khác
+// trực thay (đồng bộ trạng thái checked_in nhưng không phải mình có quyền check-out nó).
+// ======================
+router.get('/my/checked-in-shifts', auth, async (req, res) => {
+  const { ma_nhan_vien } = req.employee;
+  const month = Number(req.query.month) || new Date().getMonth() + 1;
+  const year = Number(req.query.year) || new Date().getFullYear();
+
+  try {
+    const [rows] = await db.query(
+      `SELECT
+        lt.id, lt.ngay, lt.ca, lt.trang_thai, lt.gio_vao,
+        tt_ao.lich_truc_ao_id
+       FROM lich_truc lt
+       LEFT JOIN truc_thay tt_ao ON tt_ao.lich_truc_ao_id = lt.id AND tt_ao.trang_thai = 'active'
+       WHERE lt.nhan_vien_id = (SELECT id FROM nhanvien WHERE ma_nhan_vien = ?)
+         AND lt.trang_thai = 'checked_in'
+         AND MONTH(lt.ngay) = ? AND YEAR(lt.ngay) = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM truc_thay tt_goc WHERE tt_goc.lich_truc_goc_id = lt.id AND tt_goc.trang_thai = 'active'
+         )
+       ORDER BY lt.ngay ASC, lt.ca ASC`,
+      [ma_nhan_vien, month, year]
+    );
+
+    const result = rows.map(row => ({
+      id: row.id,
+      ngay: row.ngay ? formatDateLocal(row.ngay) : null,
+      ca: row.ca,
+      trang_thai: row.trang_thai,
+      gio_vao: row.gio_vao,
+      is_truc_thay: row.lich_truc_ao_id != null,
+      lich_truc_ao_id: row.lich_truc_ao_id
+    }));
+
+    res.json(result);
+  } catch (error) {
+    console.error('Lỗi lấy ca quên check-out:', error);
+    res.status(500).json({ message: 'Lỗi server' });
+  }
+});
+
+// ======================
 // ĐĂNG KÝ LỊCH TRỰC (CÓ KIỂM TRA QUÁ GIỜ)
 // ======================
 router.post('/schedule/register', auth, async (req, res) => {
