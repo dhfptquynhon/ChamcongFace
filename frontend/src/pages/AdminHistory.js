@@ -2025,10 +2025,14 @@ const [statsYear, setStatsYear] = useState(today.getFullYear());
       ma_nhan_vien: '',
       ten_nhan_vien: '',
       password: '',
-      is_admin: false
+      is_admin: false,
+      admin_readonly: false
     },
     errors: {}
   });
+
+  // Danh sách tài khoản quản trị viên (lấy cùng lúc với loadEmployeesWithStats)
+  const [adminAccounts, setAdminAccounts] = useState([]);
 
   // ======================
   // State cho reset mật khẩu
@@ -2330,6 +2334,7 @@ const loadEmployeesWithStats = async () => {
     const empRes = await axios.get('/api/attendance/admin/employees', {
       headers: { Authorization: `Bearer ${auth.token}` }
     });
+    setAdminAccounts((empRes.data || []).filter(emp => emp.is_admin));
     const nonAdminEmployees = (empRes.data || []).filter(emp => !emp.is_admin);
     
     // Lấy thống kê tháng cho từng nhân viên
@@ -2628,12 +2633,14 @@ const loadEmployeesWithStats = async () => {
         ma_nhan_vien: employee.ma_nhan_vien,
         ten_nhan_vien: employee.ten_nhan_vien,
         password: '',
-        is_admin: employee.is_admin || false
+        is_admin: employee.is_admin || false,
+        admin_readonly: employee.admin_readonly === 1 || employee.admin_readonly === true
       } : {
         ma_nhan_vien: '',
         ten_nhan_vien: '',
         password: '',
-        is_admin: false
+        is_admin: false,
+        admin_readonly: false
       },
       errors: {}
     });
@@ -2660,7 +2667,8 @@ const loadEmployeesWithStats = async () => {
           ma_nhan_vien: employee.ma_nhan_vien,
           ten_nhan_vien: employee.ten_nhan_vien,
           password: employee.password,
-          is_admin: employee.is_admin
+          is_admin: employee.is_admin,
+          admin_readonly: employee.admin_readonly
         }, {
           headers: { Authorization: `Bearer ${auth.token}` }
         });
@@ -2668,7 +2676,8 @@ const loadEmployeesWithStats = async () => {
       } else {
         const updateData = {
           ten_nhan_vien: employee.ten_nhan_vien,
-          is_admin: employee.is_admin
+          is_admin: employee.is_admin,
+          admin_readonly: employee.admin_readonly
         };
         if (employee.password) {
           updateData.password = employee.password;
@@ -2681,6 +2690,7 @@ const loadEmployeesWithStats = async () => {
 
       // Refresh danh sách
       await fetchRegisteredUsers();
+      await loadEmployeesWithStats();
       setEmployeeDialog({ ...employeeDialog, open: false });
       
     } catch (err) {
@@ -3191,6 +3201,7 @@ const handleTabChange = (event, newValue) => {
           startIcon={<AddIcon />}
           onClick={() => openEmployeeDialog('create')}
           sx={{ fontSize: '0.8rem', py: 0.6 }}
+          disabled={auth?.employee?.admin_readonly}
         >
           Thêm nhân viên
         </Button>
@@ -3199,6 +3210,65 @@ const handleTabChange = (event, newValue) => {
         </Button>
       </Stack>
     </Stack>
+
+    {/* DANH SÁCH QUẢN TRỊ VIÊN */}
+    {adminAccounts.length > 0 && (
+      <Paper variant="outlined" sx={{ p: 2, mb: 2.5, borderColor: '#f44336' }}>
+        <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <AdminPanelSettingsIcon color="error" fontSize="small" />
+          🛡️ Danh sách quản trị viên ({adminAccounts.length})
+        </Typography>
+        <Stack spacing={1}>
+          {adminAccounts.map((admin) => (
+            <Box
+              key={admin.id}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                p: 1,
+                borderRadius: 1,
+                backgroundColor: (theme) => (theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : '#fafafa')
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Avatar sx={{ width: 32, height: 32, bgcolor: '#f44336' }}>
+                  {admin.ten_nhan_vien.charAt(0)}
+                </Avatar>
+                <Box>
+                  <Typography fontWeight="bold" sx={{ fontSize: '0.9rem' }}>
+                    {admin.ten_nhan_vien} ({admin.ma_nhan_vien})
+                    {admin.id === auth?.employee?.id && (
+                      <Typography component="span" variant="caption" color="text.secondary"> — bạn</Typography>
+                    )}
+                  </Typography>
+                </Box>
+              </Box>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Chip
+                  size="small"
+                  label={admin.admin_readonly ? 'Chỉ xem' : 'Toàn quyền'}
+                  color={admin.admin_readonly ? 'default' : 'error'}
+                  variant={admin.admin_readonly ? 'outlined' : 'filled'}
+                />
+                <Tooltip title={auth?.employee?.admin_readonly ? "Tài khoản chỉ xem, không có quyền sửa" : "Sửa quyền"}>
+                  <span>
+                    <IconButton
+                      size="small"
+                      color="warning"
+                      onClick={() => openEmployeeDialog('edit', admin)}
+                      disabled={auth?.employee?.admin_readonly}
+                    >
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Stack>
+            </Box>
+          ))}
+        </Stack>
+      </Paper>
+    )}
 
     {/* Phần bảng giữ nguyên */}
     {loadingEmployees ? (
@@ -3251,31 +3321,37 @@ const handleTabChange = (event, newValue) => {
                 <VisibilityIcon />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Sửa thông tin">
-              <IconButton color="warning" onClick={() => openEmployeeDialog('edit', user)}>
-                <EditIcon />
-              </IconButton>
+            <Tooltip title={auth?.employee?.admin_readonly ? "Tài khoản chỉ xem, không có quyền sửa" : "Sửa thông tin"}>
+              <span>
+                <IconButton color="warning" onClick={() => openEmployeeDialog('edit', user)} disabled={auth?.employee?.admin_readonly}>
+                  <EditIcon />
+                </IconButton>
+              </span>
             </Tooltip>
             <Tooltip title="Cài đặt đăng nhập khuôn mặt">
-              <IconButton color="secondary" onClick={() => openFaceSettings(user)}>
-                <SettingsIcon />
-              </IconButton>
+              <span>
+                <IconButton color="secondary" onClick={() => openFaceSettings(user)} disabled={auth?.employee?.admin_readonly}>
+                  <SettingsIcon />
+                </IconButton>
+              </span>
             </Tooltip>
             <Tooltip title={user.is_active === 0 ? "Kích hoạt lại" : "Vô hiệu hóa (nghỉ việc)"}>
               <span>
                 <IconButton
                   color={user.is_active === 0 ? "success" : "default"}
                   onClick={() => handleToggleActive(user)}
-                  disabled={user.id === auth.employee.id || user.is_admin}
+                  disabled={user.id === auth.employee.id || user.is_admin || auth?.employee?.admin_readonly}
                 >
                   {user.is_active === 0 ? <CheckCircleIcon /> : <BlockIcon />}
                 </IconButton>
               </span>
             </Tooltip>
             <Tooltip title="Xóa nhân viên">
-              <IconButton color="error" onClick={() => handleDeleteEmployee(user.id)} disabled={user.id === auth.employee.id}>
-                <DeleteIcon />
-              </IconButton>
+              <span>
+                <IconButton color="error" onClick={() => handleDeleteEmployee(user.id)} disabled={user.id === auth.employee.id || auth?.employee?.admin_readonly}>
+                  <DeleteIcon />
+                </IconButton>
+              </span>
             </Tooltip>
           </TableCell>
         </TableRow>
@@ -3358,7 +3434,7 @@ const handleTabChange = (event, newValue) => {
                   checked={employeeDialog.employee.is_admin}
                   onChange={(e) => setEmployeeDialog({
                     ...employeeDialog,
-                    employee: { ...employeeDialog.employee, is_admin: e.target.checked }
+                    employee: { ...employeeDialog.employee, is_admin: e.target.checked, admin_readonly: e.target.checked ? employeeDialog.employee.admin_readonly : false }
                   })}
                 />
               }
@@ -3369,7 +3445,22 @@ const handleTabChange = (event, newValue) => {
                 </Box>
               }
             />
-            
+
+            {employeeDialog.employee.is_admin && (
+              <FormControl sx={{ mt: 1, ml: 4 }}>
+                <RadioGroup
+                  value={employeeDialog.employee.admin_readonly ? 'readonly' : 'full'}
+                  onChange={(e) => setEmployeeDialog({
+                    ...employeeDialog,
+                    employee: { ...employeeDialog.employee, admin_readonly: e.target.value === 'readonly' }
+                  })}
+                >
+                  <FormControlLabel value="full" control={<Radio size="small" />} label="Toàn quyền (xem, thêm, sửa, xóa)" />
+                  <FormControlLabel value="readonly" control={<Radio size="small" />} label="Chỉ xem (không sửa/xóa/duyệt được gì)" />
+                </RadioGroup>
+              </FormControl>
+            )}
+
             <Alert severity="info" sx={{ mt: 2 }}>
               <Typography variant="body2">
                 <strong>Lưu ý:</strong> Mật khẩu sẽ được mã hóa trước khi lưu vào hệ thống.
