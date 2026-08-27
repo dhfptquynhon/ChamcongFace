@@ -1,12 +1,13 @@
 // src/components/FaceRegistrationPrompt.js
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import FaceRegisterModal from '../pages/FaceRegisterModal';
 
-const FaceRegistrationPrompt = ({ auth, onClose, onSuccess }) => {
-  const [showRegister, setShowRegister] = useState(false);
+const dismissKey = (maNhanVien) => `faceRegPromptDismissed_${maNhanVien}`;
+
+const FaceRegistrationPrompt = ({ auth, onClose, onGoToProfile }) => {
   const [checked, setChecked] = useState(false);
   const [registered, setRegistered] = useState(false);
+  const [dontAskAgain, setDontAskAgain] = useState(false);
 
   useEffect(() => {
     const check = async () => {
@@ -30,27 +31,48 @@ const FaceRegistrationPrompt = ({ auth, onClose, onSuccess }) => {
   if (!checked) return null;
   if (registered) return null;
 
+  let dismissed = false;
+  try {
+    dismissed = localStorage.getItem(dismissKey(auth?.employee?.ma_nhan_vien)) === '1';
+  } catch (e) {
+    // localStorage có thể bị chặn (chế độ ẩn danh...) - bỏ qua, cứ hiện thông báo bình thường
+  }
+  if (dismissed) return null;
+
+  const handleGoRegister = () => {
+    if (onGoToProfile) onGoToProfile();
+    onClose();
+  };
+
+  const handleLater = () => {
+    if (dontAskAgain) {
+      try {
+        localStorage.setItem(dismissKey(auth?.employee?.ma_nhan_vien), '1');
+      } catch (e) {
+        // bỏ qua nếu không lưu được
+      }
+    }
+    onClose();
+  };
+
   return (
     <div style={styles.overlay}>
       <div style={styles.modal}>
         <h3>📢 Thông báo</h3>
         <p>Bạn chưa đăng ký khuôn mặt. Vui lòng đăng ký để sử dụng tính năng đăng nhập bằng khuôn mặt sau này.</p>
+        <label style={styles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={dontAskAgain}
+            onChange={(e) => setDontAskAgain(e.target.checked)}
+          />
+          Không muốn đăng ký, không hiển thị lại thông báo này
+        </label>
         <div style={styles.buttons}>
-          <button style={styles.btnPrimary} onClick={() => setShowRegister(true)}>Đăng ký ngay</button>
-          <button style={styles.btnSecondary} onClick={onClose}>Để sau</button>
+          <button style={styles.btnPrimary} onClick={handleGoRegister}>Đăng ký ngay</button>
+          <button style={styles.btnSecondary} onClick={handleLater}>Để sau</button>
         </div>
       </div>
-      {showRegister && (
-        <FaceRegisterModal
-          onClose={() => setShowRegister(false)}
-          onSuccess={() => {
-            setShowRegister(false);
-            setRegistered(true);
-            if (onSuccess) onSuccess();
-            onClose();
-          }}
-        />
-      )}
     </div>
   );
 };
@@ -75,6 +97,16 @@ const styles = {
     maxWidth: 400,
     textAlign: 'center',
     boxShadow: '0 10px 25px rgba(0,0,0,0.2)'
+  },
+  checkboxLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 16,
+    fontSize: 13,
+    color: '#555',
+    cursor: 'pointer'
   },
   buttons: {
     display: 'flex',

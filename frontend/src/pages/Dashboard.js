@@ -23,7 +23,7 @@ const lockLightTheme = (outerTheme) => ({
 });
 
 const Dashboard = () => {
-  const { auth, setAuth } = useContext(AuthContext);
+  const { auth } = useContext(AuthContext);
   const navigate = useNavigate();
   const [tab, setTab] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -40,18 +40,6 @@ const Dashboard = () => {
     return <AdminHistory />;
   }
 
-  // Cập nhật trạng thái face_registered trong context sau khi đăng ký thành công
-  const handleFaceRegistrationSuccess = () => {
-    setAuth({
-      ...auth,
-      employee: {
-        ...auth.employee,
-        face_registered: true
-      }
-    });
-    setShowPrompt(false);
-  };
-
   return (
     <Box
       sx={{
@@ -66,10 +54,10 @@ const Dashboard = () => {
     >
       {/* Prompt đăng ký khuôn mặt - chỉ hiện nếu chưa đăng ký và chưa đóng */}
       {showPrompt && auth && !auth.employee?.face_registered && (
-        <FaceRegistrationPrompt 
-          auth={auth} 
+        <FaceRegistrationPrompt
+          auth={auth}
           onClose={() => setShowPrompt(false)}
-          onSuccess={handleFaceRegistrationSuccess}
+          onGoToProfile={() => setTab(2)}
         />
       )}
 
