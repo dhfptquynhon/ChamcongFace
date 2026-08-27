@@ -38,6 +38,22 @@ const SHIFT_LABELS = {
   ca4: 'Ca 4: 15:00 – 17:30',
 };
 
+const SHIFT_END = { ca1: '09:30', ca2: '12:30', ca3: '15:00', ca4: '17:30' };
+
+// Đã check-in nhưng có vẻ quên check-out: ca của ngày trước, hoặc ca hôm nay đã quá giờ kết thúc.
+const isOverdueCheckout = (shift) => {
+  if (shift.trang_thai !== 'checked_in') return false;
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+  const shiftDate = shift.ngay ? String(shift.ngay).split('T')[0] : todayStr;
+  if (shiftDate < todayStr) return true;
+  if (shiftDate === todayStr) {
+    const currentTime = now.toTimeString().slice(0, 5);
+    return currentTime > (SHIFT_END[shift.ca] || '23:59');
+  }
+  return false;
+};
+
 const STATUS_CONFIG = {
   registered: { label: 'Đã đăng ký', color: 'default' },
   checked_in: { label: 'Đang làm', color: 'warning' },
@@ -267,6 +283,37 @@ const Attendance = ({ onChanged }) => {
     }
   };
 
+  // Lỡ check-in nhưng không đi làm ca đó: hủy check-in thay vì check-out, đưa ca về lại "chưa check-in".
+  const handleUndoCheckin = async (shift) => {
+    if (!auth?.token || !shift) return;
+    if (!window.confirm('Xác nhận bạn KHÔNG đi làm ca này? Ca sẽ quay lại trạng thái chưa check-in.')) return;
+
+    setLoadingActionId(shift.id);
+    setMessage('');
+    setError('');
+    try {
+      const url = shift.is_truc_thay
+        ? `/api/attendance/truc-thay/undo-checkin/${shift.lich_truc_ao_id || shift.id}`
+        : `/api/attendance/schedule/${shift.id}/undo-checkin`;
+      const res = await axios.post(
+        url,
+        {},
+        { headers: { Authorization: `Bearer ${auth.token}` } }
+      );
+      setMessage(res.data?.message || 'Đã hủy check-in');
+      setShifts((prev) =>
+        prev.map((s) =>
+          s.id === shift.id ? { ...s, trang_thai: 'registered', gio_vao: null } : s
+        )
+      );
+      if (onChanged) onChanged();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Hủy check-in thất bại');
+    } finally {
+      setLoadingActionId(null);
+    }
+  };
+
   const renderParticipants = (shift) => {
     if (!shift.participants || shift.participants.length === 0) {
       return <Typography variant="body2">Chưa có ai khác</Typography>;
@@ -291,6 +338,7 @@ const Attendance = ({ onChanged }) => {
 
   const [viewY, viewM, viewD] = viewDate.split('-').map(Number);
   const formattedViewDate = `${viewD}/${viewM}/${viewY}`;
+  const overdueShifts = shifts.filter(isOverdueCheckout);
 
   return (
     <Box sx={{ p: 3 }}>
@@ -369,6 +417,13 @@ const Attendance = ({ onChanged }) => {
         </Alert>
       )}
 
+      {overdueShifts.length > 0 && (
+        <Alert severity="warning" icon={<AccessTimeIcon />} sx={{ mb: 2 }}>
+          ⏰ Bạn đã check-in {overdueShifts.length} ca nhưng chưa check-out! Hãy check-out hoặc chọn
+          "Không cần checkout" nếu bạn không đi làm ca đó.
+        </Alert>
+      )}
+
       {loading && shifts.length === 0 ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
           <CircularProgress />
@@ -434,6 +489,12 @@ const Attendance = ({ onChanged }) => {
                   {shift.is_truc_thay && shift.ten_nguoi_duoc_truc_thay && (
                     <Alert severity="warning" sx={{ mb: 1, py: 0, fontSize: '0.75rem', backgroundColor: '#fff3e0' }}>
                       Trực thay cho <strong>{shift.ten_nguoi_duoc_truc_thay}</strong> — giờ làm sẽ tính cho họ.
+                    </Alert>
+                  )}
+
+                  {isOverdueCheckout(shift) && (
+                    <Alert severity="warning" sx={{ mb: 1, py: 0, fontSize: '0.75rem' }}>
+                      Bạn quên check-out ca này! Hãy check-out, hoặc chọn "Không cần checkout" nếu không đi làm.
                     </Alert>
                   )}
 
@@ -512,6 +573,23 @@ const Attendance = ({ onChanged }) => {
                         </Button>
                       </span>
                     </Tooltip>
+
+                    {shift.trang_thai === 'checked_in' && (
+                      <Tooltip title="Chọn nếu bạn lỡ check-in nhưng không đi làm ca này">
+                        <span>
+                          <Button
+                            variant="outlined"
+                            color="error"
+                            size="small"
+                            disabled={disabled}
+                            onClick={() => handleUndoCheckin(shift)}
+                            sx={{ minWidth: 90 }}
+                          >
+                            Không cần checkout
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    )}
                   </Box>
                 </Paper>
               </Grid>

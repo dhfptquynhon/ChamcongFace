@@ -184,11 +184,11 @@ const requireAdmin = async (req, res, next) => {
       'SELECT is_admin FROM nhanvien WHERE ma_nhan_vien = ?',
       [ma_nhan_vien]
     );
-    
+
     if (rows.length === 0 || rows[0].is_admin !== 1) {
       return res.status(403).json({ message: 'Bạn không có quyền admin' });
     }
-    
+
     next();
   } catch (error) {
     console.error('Lỗi kiểm tra quyền admin:', error);
@@ -197,9 +197,34 @@ const requireAdmin = async (req, res, next) => {
 };
 
 // ======================
+// MIDDLEWARE: Kiểm tra quyền admin TOÀN QUYỀN (chặn admin chỉ xem khỏi mọi thao tác sửa/xóa)
+// ======================
+const requireFullAdmin = async (req, res, next) => {
+  try {
+    const { ma_nhan_vien } = req.employee;
+    const [rows] = await db.query(
+      'SELECT is_admin, admin_readonly FROM nhanvien WHERE ma_nhan_vien = ?',
+      [ma_nhan_vien]
+    );
+
+    if (rows.length === 0 || rows[0].is_admin !== 1) {
+      return res.status(403).json({ message: 'Bạn không có quyền admin' });
+    }
+    if (rows[0].admin_readonly === 1) {
+      return res.status(403).json({ message: 'Tài khoản quản trị viên chỉ xem, không có quyền thực hiện thao tác này' });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Lỗi kiểm tra quyền admin toàn quyền:', error);
+    res.status(500).json({ message: 'Lỗi server' });
+  }
+};
+
+// ======================
 // ĐĂNG KÝ TÀI KHOẢN MỚI (CHỈ ADMIN)
 // ======================
-router.post('/auth/register', auth, requireAdmin, async (req, res) => {
+router.post('/auth/register', auth, requireFullAdmin, async (req, res) => {
   const { ma_nhan_vien, ten_nhan_vien, password } = req.body;
   
   try {
@@ -238,7 +263,7 @@ router.post('/auth/register', auth, requireAdmin, async (req, res) => {
 // ======================
 // ADMIN RESET MẬT KHẨU CHO USER
 // ======================
-router.post('/admin/reset-password', auth, requireAdmin, async (req, res) => {
+router.post('/admin/reset-password', auth, requireFullAdmin, async (req, res) => {
   const { ma_nhan_vien, new_password } = req.body;
 
   if (!ma_nhan_vien || !new_password) {
@@ -295,18 +320,18 @@ router.get('/admin/employees', auth, requireAdmin, async (req, res) => {
 // ======================
 // ADMIN API: TẠO NHÂN VIÊN MỚI
 // ======================
-router.post('/admin/employees/create', auth, requireAdmin, async (req, res) => {
-  const { ma_nhan_vien, ten_nhan_vien, password, is_admin } = req.body;
+router.post('/admin/employees/create', auth, requireFullAdmin, async (req, res) => {
+  const { ma_nhan_vien, ten_nhan_vien, password, is_admin, admin_readonly } = req.body;
   try {
     const [existing] = await db.query('SELECT id FROM nhanvien WHERE ma_nhan_vien = ?', [ma_nhan_vien]);
     if (existing.length > 0) return res.status(400).json({ message: 'Mã nhân viên đã tồn tại' });
 
     const hashedPassword = await bcrypt.hash(password, saltRounds);
-    
+
     const [result] = await db.query(
-        `INSERT INTO nhanvien (ma_nhan_vien, ten_nhan_vien, password, is_admin, face_embedding)  
-         VALUES (?, ?, ?, ?, NULL)`, 
-        [ma_nhan_vien, ten_nhan_vien, hashedPassword, is_admin ? 1 : 0]
+        `INSERT INTO nhanvien (ma_nhan_vien, ten_nhan_vien, password, is_admin, admin_readonly, face_embedding)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+        [ma_nhan_vien, ten_nhan_vien, hashedPassword, is_admin ? 1 : 0, (is_admin && admin_readonly) ? 1 : 0]
     );
 
     res.status(201).json({
@@ -323,14 +348,19 @@ router.post('/admin/employees/create', auth, requireAdmin, async (req, res) => {
 // ======================
 // ADMIN API: CẬP NHẬT NHÂN VIÊN
 // ======================
-router.put('/admin/employees/:id', auth, requireAdmin, async (req, res) => {
+router.put('/admin/employees/:id', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
-  const { ten_nhan_vien, password, is_admin } = req.body;
-  
+  const { ten_nhan_vien, password, is_admin, admin_readonly } = req.body;
+
   try {
-    let updateQuery = 'UPDATE nhanvien SET ten_nhan_vien = ?, is_admin = ?';
-    let queryParams = [ten_nhan_vien, is_admin ? 1 : 0];
-    
+    // Không cho tự hạ quyền chính mình xuống chỉ xem hoặc nhân viên thường - tránh tự khóa mất quyền
+    if (req.employee.id === parseInt(id) && (!is_admin || admin_readonly)) {
+      return res.status(400).json({ message: 'Không thể tự hạ quyền quản trị toàn quyền của chính bạn' });
+    }
+
+    let updateQuery = 'UPDATE nhanvien SET ten_nhan_vien = ?, is_admin = ?, admin_readonly = ?';
+    let queryParams = [ten_nhan_vien, is_admin ? 1 : 0, (is_admin && admin_readonly) ? 1 : 0];
+
     // Nếu có password thì cập nhật
     if (password && password.trim() !== '') {
       const bcrypt = require('bcrypt');
@@ -360,7 +390,7 @@ router.put('/admin/employees/:id', auth, requireAdmin, async (req, res) => {
 // Nhân viên bị vô hiệu hóa không thể đăng nhập / đăng ký ca / check-in / check-out nữa,
 // nhưng dữ liệu chấm công cũ vẫn được giữ nguyên để xem lại khi cần.
 // ======================
-router.put('/admin/employees/:id/active', auth, requireAdmin, async (req, res) => {
+router.put('/admin/employees/:id/active', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
   const { is_active } = req.body;
 
@@ -393,7 +423,7 @@ router.put('/admin/employees/:id/active', auth, requireAdmin, async (req, res) =
 // ======================
 // ADMIN API: XÓA NHÂN VIÊN
 // ======================
-router.delete('/admin/employees/:id', auth, requireAdmin, async (req, res) => {
+router.delete('/admin/employees/:id', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
   
   try {
@@ -829,7 +859,7 @@ router.get('/admin/registered-users/:id/detail', auth, requireAdmin, async (req,
 // ======================
 // ADMIN: CẬP NHẬT CÀI ĐẶT KHUÔN MẶT CHO NHÂN VIÊN
 // ======================
-router.put('/admin/employee/:id/face-settings', auth, requireAdmin, async (req, res) => {
+router.put('/admin/employee/:id/face-settings', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
   const { face_login_enabled, face_code, face_code_enabled } = req.body;
 
@@ -869,7 +899,7 @@ router.put('/admin/employee/:id/face-settings', auth, requireAdmin, async (req, 
 // ======================
 // ADMIN: XÓA DỮ LIỆU KHUÔN MẶT CỦA NHÂN VIÊN
 // ======================
-router.delete('/admin/employee/:id/face-data', auth, requireAdmin, async (req, res) => {
+router.delete('/admin/employee/:id/face-data', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     await db.query('UPDATE nhanvien SET face_embedding = NULL WHERE id = ?', [id]);
@@ -1448,7 +1478,7 @@ router.get('/admin/tructhay/all', auth, requireAdmin, async (req, res) => {
 // ======================
 // ADMIN API: DUYỆT/TỪ CHỐI TRỰC THAY
 // ======================
-router.post('/admin/tructhay/:id/approve', auth, requireAdmin, async (req, res) => {
+router.post('/admin/tructhay/:id/approve', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
   const { approve } = req.body; // true: duyệt, false: từ chối
 
@@ -1637,7 +1667,7 @@ router.get('/admin/overview-stats', auth, requireAdmin, async (req, res) => {
 // ======================
 // ADMIN API: Hoàn tác checkout (trả lại trạng thái đang làm)
 // ======================
-router.post('/admin/schedule/:id/revert-checkout', auth, requireAdmin, async (req, res) => {
+router.post('/admin/schedule/:id/revert-checkout', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -2674,11 +2704,67 @@ router.post('/truc-thay/checkin/:lich_truc_ao_id', auth, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Lỗi check-in trực thay:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: 'Lỗi server khi check-in trực thay',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+// ======================
+// API: Hủy check-in trực thay (không cần checkout) - lỡ check-in nhưng không đi làm ca trực thay.
+// Đưa cả lịch ảo lẫn lịch gốc (đã đồng bộ lúc check-in) về lại "registered".
+// ======================
+router.post('/truc-thay/undo-checkin/:lich_truc_ao_id', auth, async (req, res) => {
+  const { ma_nhan_vien } = req.employee;
+  const { lich_truc_ao_id } = req.params;
+
+  try {
+    const [virtualScheduleRows] = await db.query(
+      `SELECT lt.*, tt.lich_truc_goc_id
+       FROM lich_truc lt
+       INNER JOIN truc_thay tt ON lt.id = tt.lich_truc_ao_id
+       WHERE lt.id = ? AND lt.nhan_vien_id = (
+         SELECT id FROM nhanvien WHERE ma_nhan_vien = ?
+       ) AND tt.trang_thai = 'active'`,
+      [lich_truc_ao_id, ma_nhan_vien]
+    );
+
+    if (virtualScheduleRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy ca trực thay hoặc không có quyền' });
+    }
+
+    const virtualSchedule = virtualScheduleRows[0];
+    const lich_truc_goc_id = virtualSchedule.lich_truc_goc_id;
+
+    if (virtualSchedule.trang_thai !== 'checked_in') {
+      return res.status(400).json({ success: false, message: 'Ca này chưa check-in hoặc đã check-out, không thể hủy check-in' });
+    }
+
+    await db.query('START TRANSACTION');
+    try {
+      await db.query(
+        `UPDATE lich_truc SET trang_thai = 'registered', gio_vao = NULL, updated_at = NOW() WHERE id = ?`,
+        [lich_truc_ao_id]
+      );
+      await db.query(
+        `UPDATE lich_truc SET trang_thai = 'registered', gio_vao = NULL, updated_at = NOW() WHERE id = ?`,
+        [lich_truc_goc_id]
+      );
+      await db.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: 'Đã hủy check-in. Ca quay lại trạng thái chưa check-in, bạn có thể check-in lại nếu vẫn đi làm ca này.'
+      });
+    } catch (error) {
+      await db.query('ROLLBACK');
+      throw error;
+    }
+  } catch (error) {
+    console.error('❌ Lỗi hủy check-in trực thay:', error);
+    res.status(500).json({ success: false, message: 'Lỗi server khi hủy check-in trực thay' });
   }
 });
 
@@ -3055,7 +3141,7 @@ router.get('/admin/pending-time-adjustments', auth, requireAdmin, async (req, re
 // ======================
 // ADMIN API: Duyệt/từ chối yêu cầu điều chỉnh giờ (ĐÃ SỬA)
 // ======================
-router.post('/admin/time-adjustment/:id/process', auth, requireAdmin, async (req, res) => {
+router.post('/admin/time-adjustment/:id/process', auth, requireFullAdmin, async (req, res) => {
   const { id } = req.params;
   const { approve, thoi_gian_dieu_chinh, ghi_chu_admin } = req.body;
   const admin_id = req.employee.id;
@@ -4021,6 +4107,45 @@ router.post('/schedule/:id/checkin', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Lỗi check-in:', error);
+    res.status(500).json({ message: 'Lỗi server' });
+  }
+});
+
+// ======================
+// HỦY CHECK-IN (KHÔNG CẦN CHECKOUT) - dành cho trường hợp lỡ check-in nhưng không đi làm ca đó.
+// Đưa ca về lại trạng thái "registered" như chưa từng check-in, để có thể check-in lại nếu vẫn đi làm.
+// ======================
+router.post('/schedule/:id/undo-checkin', auth, async (req, res) => {
+  const { ma_nhan_vien } = req.employee;
+  const { id } = req.params;
+
+  try {
+    const [rows] = await db.query('SELECT * FROM lich_truc WHERE id = ?', [id]);
+    if (rows.length === 0) return res.status(404).json({ message: 'Không tìm thấy ca đăng ký' });
+
+    const record = rows[0];
+
+    if (record.ma_nhan_vien !== ma_nhan_vien) {
+      return res.status(403).json({ message: 'Bạn không có quyền hủy check-in ca này' });
+    }
+    if (record.trang_thai !== 'checked_in') {
+      return res.status(400).json({ message: 'Ca này chưa check-in hoặc đã check-out, không thể hủy check-in' });
+    }
+
+    await db.query(
+      `UPDATE lich_truc
+       SET trang_thai = 'registered', gio_vao = NULL, updated_at = NOW(),
+           ghi_chu = CONCAT(COALESCE(ghi_chu, ''), ' | Đã hủy check-in (không đi làm) lúc ', NOW())
+       WHERE id = ?`,
+      [id]
+    );
+
+    res.json({
+      message: 'Đã hủy check-in. Ca quay lại trạng thái chưa check-in, bạn có thể check-in lại nếu vẫn đi làm ca này.',
+      status: 'registered'
+    });
+  } catch (error) {
+    console.error('Lỗi hủy check-in:', error);
     res.status(500).json({ message: 'Lỗi server' });
   }
 });

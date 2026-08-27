@@ -84,8 +84,9 @@ router.post('/login', async (req, res) => {
                 ma_nhan_vien: employee.ma_nhan_vien,
                 ten_nhan_vien: employee.ten_nhan_vien,
                 is_admin: employee.is_admin === 1 || employee.is_admin === true,
+                admin_readonly: employee.admin_readonly === 1 || employee.admin_readonly === true,
                 // Trả về true nếu đã có dữ liệu khuôn mặt, ngược lại là false
-                face_registered: !!employee.face_embedding 
+                face_registered: !!employee.face_embedding
             }
         });
 

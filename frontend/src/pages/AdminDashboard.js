@@ -36,6 +36,8 @@ import {
   Divider,
   Switch,
   FormControlLabel,
+  RadioGroup,
+  Radio,
   Stack
 } from '@mui/material';
 import {
@@ -110,7 +112,8 @@ const AdminDashboard = () => {
       ma_nhan_vien: '',
       ten_nhan_vien: '',
       password: '',
-      is_admin: false
+      is_admin: false,
+      admin_readonly: false
     },
     errors: {}
   });
@@ -374,12 +377,14 @@ const AdminDashboard = () => {
         ma_nhan_vien: employee.ma_nhan_vien,
         ten_nhan_vien: employee.ten_nhan_vien,
         password: '',
-        is_admin: employee.is_admin || false
+        is_admin: employee.is_admin || false,
+        admin_readonly: employee.admin_readonly === 1 || employee.admin_readonly === true
       } : {
         ma_nhan_vien: '',
         ten_nhan_vien: '',
         password: '',
-        is_admin: false
+        is_admin: false,
+        admin_readonly: false
       },
       errors: {}
     });
@@ -413,7 +418,8 @@ const AdminDashboard = () => {
         // Cập nhật - chỉ gửi các trường cần thiết
         const updateData = {
           ten_nhan_vien: employee.ten_nhan_vien,
-          is_admin: employee.is_admin
+          is_admin: employee.is_admin,
+          admin_readonly: employee.admin_readonly
         };
         // Chỉ thêm password nếu có
         if (employee.password) {
@@ -777,6 +783,7 @@ const AdminDashboard = () => {
                 variant="contained"
                 startIcon={<AddIcon />}
                 onClick={() => openEmployeeDialog('create')}
+                disabled={auth?.employee?.admin_readonly}
               >
                 Thêm nhân viên
               </Button>
@@ -788,6 +795,68 @@ const AdminDashboard = () => {
               </Tooltip>
             </Box>
           </Box>
+
+          {/* DANH SÁCH QUẢN TRỊ VIÊN */}
+          {employees.filter(e => e.is_admin).length > 0 && (
+            <Paper variant="outlined" sx={{ p: 2, mb: 3, borderColor: '#f44336' }}>
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <AdminPanelSettingsIcon color="error" fontSize="small" />
+                🛡️ Danh sách quản trị viên ({employees.filter(e => e.is_admin).length})
+              </Typography>
+              <Stack spacing={1}>
+                {employees.filter(e => e.is_admin).map((admin) => (
+                  <Box
+                    key={admin.id}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      p: 1,
+                      borderRadius: 1,
+                      backgroundColor: 'action.hover'
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                      <Avatar sx={{ width: 32, height: 32, bgcolor: '#f44336' }}>
+                        {admin.ten_nhan_vien.charAt(0)}
+                      </Avatar>
+                      <Box>
+                        <Typography fontWeight="bold" sx={{ fontSize: '0.9rem' }}>
+                          {admin.ten_nhan_vien} ({admin.ma_nhan_vien})
+                          {admin.id === auth?.employee?.id && (
+                            <Typography component="span" variant="caption" color="text.secondary"> — bạn</Typography>
+                          )}
+                        </Typography>
+                      </Box>
+                    </Box>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Chip
+                        size="small"
+                        label={admin.admin_readonly ? 'Chỉ xem' : 'Toàn quyền'}
+                        color={admin.admin_readonly ? 'default' : 'error'}
+                        variant={admin.admin_readonly ? 'outlined' : 'filled'}
+                      />
+                      <Tooltip title="Sửa quyền">
+                        <span>
+                          <IconButton
+                            size="small"
+                            color="warning"
+                            onClick={() => {
+                              setSelectedEmployee(admin);
+                              openEmployeeDialog('edit', admin);
+                            }}
+                            disabled={auth?.employee?.admin_readonly}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Stack>
+                  </Box>
+                ))}
+              </Stack>
+            </Paper>
+          )}
 
           {/* BẢNG NHÂN VIÊN */}
           {loading ? (
@@ -889,20 +958,23 @@ const AdminDashboard = () => {
                             </IconButton>
                           </Tooltip>
                           
-                          <Tooltip title="Sửa thông tin">
-                            <IconButton
-                              size="small"
-                              color="warning"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedEmployee(employee);
-                                openEmployeeDialog('edit', employee);
-                              }}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
+                          <Tooltip title={auth?.employee?.admin_readonly ? "Tài khoản chỉ xem, không có quyền sửa" : "Sửa thông tin"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                color="warning"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedEmployee(employee);
+                                  openEmployeeDialog('edit', employee);
+                                }}
+                                disabled={auth?.employee?.admin_readonly}
+                              >
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </span>
                           </Tooltip>
-                          
+
                           <Tooltip title={employee.is_active === 0 ? "Kích hoạt lại" : "Vô hiệu hóa (nghỉ việc)"}>
                             <span>
                               <IconButton
@@ -912,7 +984,7 @@ const AdminDashboard = () => {
                                   e.stopPropagation();
                                   handleToggleActive(employee);
                                 }}
-                                disabled={employee.id === auth.employee.id || employee.is_admin}
+                                disabled={employee.id === auth.employee.id || employee.is_admin || auth?.employee?.admin_readonly}
                               >
                                 {employee.is_active === 0 ? <CheckCircleIcon fontSize="small" /> : <BlockIcon fontSize="small" />}
                               </IconButton>
@@ -927,7 +999,7 @@ const AdminDashboard = () => {
                                 e.stopPropagation();
                                 handleDeleteEmployee(employee.id);
                               }}
-                              disabled={employee.id === auth.employee.id} // Không cho xóa chính mình
+                              disabled={employee.id === auth.employee.id || auth?.employee?.admin_readonly} // Không cho xóa chính mình
                             >
                               <DeleteIcon fontSize="small" />
                             </IconButton>
@@ -1534,7 +1606,7 @@ const AdminDashboard = () => {
                   checked={employeeDialog.employee.is_admin}
                   onChange={(e) => setEmployeeDialog({
                     ...employeeDialog,
-                    employee: { ...employeeDialog.employee, is_admin: e.target.checked }
+                    employee: { ...employeeDialog.employee, is_admin: e.target.checked, admin_readonly: e.target.checked ? employeeDialog.employee.admin_readonly : false }
                   })}
                 />
               }
@@ -1545,7 +1617,22 @@ const AdminDashboard = () => {
                 </Box>
               }
             />
-            
+
+            {employeeDialog.employee.is_admin && (
+              <FormControl sx={{ mt: 1, ml: 4 }}>
+                <RadioGroup
+                  value={employeeDialog.employee.admin_readonly ? 'readonly' : 'full'}
+                  onChange={(e) => setEmployeeDialog({
+                    ...employeeDialog,
+                    employee: { ...employeeDialog.employee, admin_readonly: e.target.value === 'readonly' }
+                  })}
+                >
+                  <FormControlLabel value="full" control={<Radio size="small" />} label="Toàn quyền (xem, thêm, sửa, xóa)" />
+                  <FormControlLabel value="readonly" control={<Radio size="small" />} label="Chỉ xem (không sửa/xóa/duyệt được gì)" />
+                </RadioGroup>
+              </FormControl>
+            )}
+
             <Alert severity="info" sx={{ mt: 2 }}>
               <Typography variant="body2">
                 <strong>Lưu ý:</strong> Mật khẩu sẽ được mã hóa trước khi lưu vào hệ thống.

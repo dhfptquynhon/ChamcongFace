@@ -108,18 +108,23 @@ const Navbar = () => {
           </Tooltip>
 
           {auth?.employee && (
-            <Typography
-              sx={{
-                fontSize: '0.85rem',
-                fontWeight: 500,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                maxWidth: { xs: 110, sm: 220 },
-              }}
-            >
-              Xin chào, <strong>{name}</strong>
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Typography
+                sx={{
+                  fontSize: '0.85rem',
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  maxWidth: { xs: 110, sm: 220 },
+                }}
+              >
+                Xin chào, <strong>{name}</strong>
+              </Typography>
+              {isAdmin && auth?.employee?.admin_readonly && (
+                <Chip size="small" label="Chỉ xem" sx={{ height: 20, fontSize: '0.65rem', bgcolor: 'rgba(255,255,255,0.25)', color: '#fff' }} />
+              )}
+            </Box>
           )}
 
           <Button

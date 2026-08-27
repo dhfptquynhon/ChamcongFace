@@ -67,7 +67,7 @@ const auth = async (req, res, next) => {
 
     // 6. Query database để lấy thông tin nhân viên đầy đủ
     const [employees] = await db.query(
-      'SELECT id, ma_nhan_vien, ten_nhan_vien, is_admin, is_active FROM nhanvien WHERE ma_nhan_vien = ?',
+      'SELECT id, ma_nhan_vien, ten_nhan_vien, is_admin, is_active, admin_readonly FROM nhanvien WHERE ma_nhan_vien = ?',
       [decoded.ma_nhan_vien]
     );
 
@@ -95,7 +95,8 @@ const auth = async (req, res, next) => {
       id: employee.id,
       ma_nhan_vien: employee.ma_nhan_vien,
       ten_nhan_vien: employee.ten_nhan_vien,
-      is_admin: employee.is_admin === 1 || employee.is_admin === true
+      is_admin: employee.is_admin === 1 || employee.is_admin === true,
+      admin_readonly: employee.admin_readonly === 1 || employee.admin_readonly === true
     };
     
     // 9. Gán token vào req để có thể sử dụng nếu cần
