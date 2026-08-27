@@ -851,6 +851,18 @@ const AdminDashboard = () => {
                           </IconButton>
                         </span>
                       </Tooltip>
+                      <Tooltip title={admin.id === auth?.employee?.id ? "Không thể tự xóa chính mình" : "Xóa quản trị viên"}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => handleDeleteEmployee(admin.id)}
+                            disabled={admin.id === auth?.employee?.id || auth?.employee?.admin_readonly}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     </Stack>
                   </Box>
                 ))}
