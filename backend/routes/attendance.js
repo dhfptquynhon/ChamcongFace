@@ -4,7 +4,7 @@ const router = express.Router();
 const db = require('../models/db');
 const auth = require('../middleware/auth');
 const ExcelJS = require('exceljs');
-const { getFaceEmbedding, cosineSimilarity } = require('../utils/face');
+const { getFaceEmbedding, cosineSimilarity, euclideanDistance } = require('../utils/face');
 const jwt = require('jsonwebtoken');
 
 const bcrypt = require('bcrypt');
@@ -5046,8 +5046,12 @@ router.post('/login-face', async (req, res) => {
     );
     console.log(`📋 Tìm thấy ${rows.length} người có dữ liệu khuôn mặt`);
 
+    // Ngưỡng khoảng cách Euclidean - đúng chuẩn hiệu chuẩn gốc của Face Recognition Net
+    // (dlib/face-api.js): cùng người thường < 0.6, khác người thường > 0.6. Chọn 0.5 (chặt
+    // hơn mức mặc định) để giảm rủi ro nhận nhầm người khác.
+    const FACE_MATCH_THRESHOLD = 0.5;
     let bestMatch = null;
-    let bestScore = 0.4;
+    let bestDistance = Infinity;
 
     for (const row of rows) {
       let storedEmbeddings;
@@ -5063,14 +5067,14 @@ router.post('/login-face', async (req, res) => {
           console.log(`⚠️ User ${row.ma_nhan_vien}: face_embedding không phải mảng`);
           continue;
         }
-        
+
         console.log(`👤 User ${row.ma_nhan_vien}: có ${storedEmbeddings.length} embeddings`);
         for (let idx = 0; idx < storedEmbeddings.length; idx++) {
           const emb = storedEmbeddings[idx];
-          const score = cosineSimilarity(descriptor, emb);
-          console.log(`   🔍 So sánh với embedding ${idx+1}: score = ${score.toFixed(4)}`);
-          if (score > bestScore) {
-            bestScore = score;
+          const distance = euclideanDistance(descriptor, emb);
+          console.log(`   🔍 So sánh với embedding ${idx+1}: distance = ${distance.toFixed(4)}`);
+          if (distance < bestDistance) {
+            bestDistance = distance;
             bestMatch = row;
           }
         }
@@ -5079,8 +5083,8 @@ router.post('/login-face', async (req, res) => {
       }
     }
 
-    console.log(`🏆 Best score: ${bestScore.toFixed(4)}, match: ${bestMatch ? bestMatch.ma_nhan_vien : 'none'}`);
-    if (bestMatch && bestScore > 0.75) { // Tạm hạ ngưỡng xuống 0.75 để test
+    console.log(`🏆 Best distance: ${bestDistance.toFixed(4)}, match: ${bestMatch ? bestMatch.ma_nhan_vien : 'none'}`);
+    if (bestMatch && bestDistance < FACE_MATCH_THRESHOLD) {
       if (bestMatch.is_active === 0) {
         return res.status(403).json({ success: false, message: 'Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ quản trị viên.' });
       }

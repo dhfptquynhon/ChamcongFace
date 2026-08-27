@@ -103,5 +103,17 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
+// Khoảng cách Euclidean - đúng chuẩn hiệu chuẩn của Face Recognition Net (dlib/face-api.js):
+// cùng một người thường cho khoảng cách < 0.6, khác người thường > 0.6.
+function euclideanDistance(a, b) {
+  if (!a || !b || a.length !== b.length) return Infinity;
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    const diff = a[i] - b[i];
+    sum += diff * diff;
+  }
+  return Math.sqrt(sum);
+}
+
 // EXPORT ĐÚNG CÁCH - CHỈ MỘT DÒNG DUY NHẤT
-module.exports = { getFaceEmbedding, cosineSimilarity };
+module.exports = { getFaceEmbedding, cosineSimilarity, euclideanDistance };
