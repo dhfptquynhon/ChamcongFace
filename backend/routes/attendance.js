@@ -3955,9 +3955,16 @@ if (date === today && currentTime > shiftEnd) {
       return res.status(400).json({ message: 'Ca đã đủ số lượng người đăng ký (tối đa 6 người)' });
     }
 
-    // Không cho đăng ký 2 ca liên tiếp trong cùng ngày
+    // Không cho đăng ký 2 ca liên tiếp trong cùng ngày.
+    // Loại trừ các dòng lịch trực ẢO (được tạo ra khi mình nhận trực thay cho người
+    // khác) — trực thay không tính là "tự đăng ký", nên không được phép chặn việc
+    // đăng ký thêm 1 ca liền kề khác của chính mình.
     const [existingByUser] = await db.query(
-      'SELECT ca FROM lich_truc WHERE ngay = ? AND nhan_vien_id = ?',
+      `SELECT lt.ca FROM lich_truc lt
+       WHERE lt.ngay = ? AND lt.nhan_vien_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM truc_thay tt WHERE tt.lich_truc_ao_id = lt.id
+         )`,
       [date, nhan_vien_id]
     );
 
