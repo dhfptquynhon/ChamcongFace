@@ -1713,7 +1713,7 @@ router.post('/admin/schedule/:id/revert-checkout', auth, requireFullAdmin, async
 router.get('/schedule', auth, async (req, res) => {
   const month = Number(req.query.month) || new Date().getMonth() + 1;
   const year = Number(req.query.year) || new Date().getFullYear();
-  const { ma_nhan_vien } = req.employee;
+  const { ma_nhan_vien, is_admin } = req.employee;
   
   try {
     // QUERY MỚI - LẤY ĐÚNG THÔNG TIN PHÂN BIỆT
@@ -1801,7 +1801,7 @@ router.get('/schedule', auth, async (req, res) => {
         };
       }
       
-      return {
+      const result = {
         ...row,
         ngay: row.ngay ? formatDateLocal(row.ngay) : null,
         // Thông tin hiển thị
@@ -1810,8 +1810,19 @@ router.get('/schedule', auth, async (req, res) => {
         loai_lich: row.loai_lich,
         truc_thay_id: row.truc_thay_id
       };
+
+      // Nhân viên thường chỉ được thấy mã nhân viên của chính mình — không thấy
+      // mã của đồng nghiệp khác (kể cả người trực thay/được trực thay), để tránh
+      // lộ mã nhân viên qua API dù giao diện đã ẩn. Admin vẫn thấy đầy đủ.
+      if (!is_admin) {
+        if (result.ma_nhan_vien !== ma_nhan_vien) delete result.ma_nhan_vien;
+        delete result.ma_nguoi_truc_thay;
+        delete result.ma_nguoi_duoc_truc_thay;
+      }
+
+      return result;
     });
-    
+
     res.json(formattedRows);
   } catch (error) {
     console.error('Lỗi lấy lịch trực:', error);

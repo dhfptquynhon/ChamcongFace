@@ -2990,7 +2990,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                         secondary={
                           <Box sx={{ mt: 1 }}>
                             <Typography variant="body2" color="text.primary">
-                              Trực thay cho: <strong>{shift.ten_nguoi_dang_ky}</strong> ({shift.ma_nguoi_dang_ky})
+                              Trực thay cho: <strong>{shift.ten_nguoi_dang_ky}</strong>{auth?.employee?.is_admin ? ` (${shift.ma_nguoi_dang_ky})` : ''}
                             </Typography>
                             {shift.ly_do && (
                               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontStyle: 'italic' }}>
@@ -3082,7 +3082,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                         secondary={
                           <Box sx={{ mt: 1 }}>
                             <Typography variant="body2" color="text.primary">
-                              Được trực thay bởi: <strong>{shift.ten_nguoi_truc_thay}</strong> ({shift.ma_nguoi_truc_thay})
+                              Được trực thay bởi: <strong>{shift.ten_nguoi_truc_thay}</strong>{auth?.employee?.is_admin ? ` (${shift.ma_nguoi_truc_thay})` : ''}
                             </Typography>
                             {shift.ly_do && (
                               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontStyle: 'italic' }}>
@@ -3427,9 +3427,11 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                                   fontWeight: 'bold'
                                 }}
                               />
-                              <Typography variant="caption" color="text.secondary">
-                                Mã: {user.ma_nhan_vien}
-                              </Typography>
+                              {(auth?.employee?.is_admin || user.ma_nhan_vien === auth?.employee?.ma_nhan_vien) && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Mã: {user.ma_nhan_vien}
+                                </Typography>
+                              )}
                             </Box>
                             
                             {/* Hiển thị thông tin trực thay chi tiết */}
@@ -4169,7 +4171,7 @@ const [trucThayDialog, setTrucThayDialog] = useState({
                   disabled={!canSelect}
                   label={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <span>{user.ten_nhan_vien} ({user.ma_nhan_vien})</span>
+                      <span>{user.ten_nhan_vien}{(auth?.employee?.is_admin || user.ma_nhan_vien === auth?.employee?.ma_nhan_vien) ? ` (${user.ma_nhan_vien})` : ''}</span>
                       {!canSelect && (
                         <Chip
                           size="small"
